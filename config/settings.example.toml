@@ -1,0 +1,11 @@
+[api]
+endpoint = ""
+key = ""
+model = ""
+
+[stt]
+model_path = ""
+language = "pt"
+
+[display]
+driver = ""

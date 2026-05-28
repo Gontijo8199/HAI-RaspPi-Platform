@@ -1,0 +1,10 @@
+config/secrets.toml
+config/settings.toml
+.env
+stt/whisper.cpp/build/
+stt/whisper.cpp/models/*.bin
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
+*.log
