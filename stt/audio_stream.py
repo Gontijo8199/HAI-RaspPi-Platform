@@ -18,7 +18,7 @@ class MicrophoneStream:
     chunk_samples : int
         Amostras por chunk entregue à fila. Deve ser 512 (exigência do Silero VAD).
     preroll_ms : int
-        Janela do buffer circular em milissegundos, anexado ao início de cada gravação.
+        Janela do buffer circular em milissegundos.
     device_index : int | None
         Índice do dispositivo PyAudio. None usa o padrão do sistema.
     """
@@ -48,16 +48,6 @@ class MicrophoneStream:
         self._running = False
 
     def start(self, loop: asyncio.AbstractEventLoop) -> None:
-        """Abre o microfone e inicia a captura em background.
-
-        Deve ser chamado de dentro do event loop para que
-        call_soon_threadsafe enfileire chunks no loop correto.
-
-        Parâmetros
-        ----------
-        loop : asyncio.AbstractEventLoop
-            Loop em execução retornado por asyncio.get_running_loop().
-        """
         self._loop = loop
         self._running = True
         self._stream = self._audio.open(
@@ -70,10 +60,13 @@ class MicrophoneStream:
             stream_callback=self._callback,
         )
         self._stream.start_stream()
-        print(
-            f"Microfone aberto — {self.sample_rate} Hz, "
-            f"chunk={self.chunk_samples} amostras "
-            f"({self.chunk_samples / self.sample_rate * 1000:.0f} ms)"
+        import logging
+
+        logging.getLogger(__name__).info(
+            "Microfone aberto — %d Hz, chunk=%d amostras (%.0f ms)",
+            self.sample_rate,
+            self.chunk_samples,
+            self.chunk_samples / self.sample_rate * 1000,
         )
 
     def stop(self) -> None:
@@ -87,15 +80,6 @@ class MicrophoneStream:
         return await self._queue.get()
 
     def get_preroll(self) -> bytes:
-        """Retorna o buffer de pre-roll concatenado em um único objeto bytes.
-
-        O buffer não é limpo aqui; use clear_preroll quando necessário.
-
-        Retorna
-        -------
-        bytes
-            Áudio PCM acumulado no buffer circular.
-        """
         return b"".join(self._preroll)
 
     def clear_preroll(self) -> None:
@@ -108,7 +92,6 @@ class MicrophoneStream:
         time_info: dict,
         status_flags: int,
     ):
-        """Callback do PyAudio. executa em thread C, fora do event loop."""
         if self._running and self._loop is not None:
             self._preroll.append(in_data)
             self._loop.call_soon_threadsafe(self._queue.put_nowait, in_data)

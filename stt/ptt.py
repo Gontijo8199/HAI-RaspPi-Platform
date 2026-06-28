@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 class PttStream:
     """Captura de voz ativada por Enter no terminal (Press-to-Talk).
 
-    Mesma interface pública de WhisperStream; substituível sem
+    Interface pública idêntica à de WhisperStream; substituível sem
     alterações em main.py::
 
         stt = PttStream(language="pt")
@@ -28,11 +28,11 @@ class PttStream:
     chunk_samples : int
         Amostras por chunk do PyAudio.
     whisper_model : str
-        Tamanho do modelo Faster-Whisper.
+        Tamanho do modelo Faster-Whisper. 'small' recomendado para Pi 5.
     whisper_device : str
         'cpu' ou 'cuda'.
     whisper_compute_type : str
-        Quantização do Whisper (ex.: 'int8').
+        Quantização do Whisper. Use sempre 'int8' na CPU.
     device_index : int | None
         Índice do dispositivo PyAudio. None usa o padrão do sistema.
     """
@@ -42,7 +42,7 @@ class PttStream:
         language: str = "pt",
         sample_rate: int = 16000,
         chunk_samples: int = 512,
-        whisper_model: str = "medium",
+        whisper_model: str = "small",
         whisper_device: str = "cpu",
         whisper_compute_type: str = "int8",
         device_index: int | None = None,
@@ -52,7 +52,7 @@ class PttStream:
         self._mic = MicrophoneStream(
             sample_rate=sample_rate,
             chunk_samples=chunk_samples,
-            preroll_ms=0,  # sem pre-roll
+            preroll_ms=0,
             device_index=device_index,
         )
         self._asr = WhisperEngine(
@@ -94,7 +94,6 @@ class PttStream:
             print("[GRAVANDO... pressione Enter para encerrar]")
             recording: list[bytes] = []
 
-            # drena chunks enquanto aguarda o segundo Enter em paralelo
             stop_event = asyncio.Event()
             producer = asyncio.create_task(
                 self._coletar_chunks(recording, stop_event), name="ptt-coletar"
@@ -111,7 +110,6 @@ class PttStream:
             asyncio.create_task(self._transcribe_and_enqueue(audio_bytes), name="ptt-transcribe")
 
     async def _coletar_chunks(self, recording: list[bytes], stop: asyncio.Event) -> None:
-        """Acumula chunks do microfone até stop ser sinalizado."""
         while not stop.is_set():
             try:
                 chunk = await asyncio.wait_for(self._mic.read_chunk(), timeout=0.1)

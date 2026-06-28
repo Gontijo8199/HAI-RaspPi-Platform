@@ -12,12 +12,11 @@ class SileroVAD:
     ----------
     threshold : float
         Probabilidade mínima para classificar um frame como fala.
-        Valores menores aumentam sensibilidade; maiores reduzem falsos positivos.
     sample_rate : int
-        Deve ser 16000. Qualquer outro valor levanta ValueError.
+        Deve ser 16000.
     """
 
-    CHUNK_SAMPLES = 512  # 32 ms a 16 kHz (exigido pelo Silero)
+    CHUNK_SAMPLES = 512
 
     def __init__(self, threshold: float = 0.5, sample_rate: int = 16000):
         if sample_rate != 16000:
@@ -26,7 +25,9 @@ class SileroVAD:
         self.threshold = threshold
         self.sample_rate = sample_rate
 
-        print("Carregando modelo Silero VAD...")
+        import logging
+
+        logging.getLogger(__name__).info("Carregando modelo Silero VAD...")
         self._model, self._utils = torch.hub.load(
             repo_or_dir="snakers4/silero-vad",
             model="silero_vad",
@@ -34,28 +35,14 @@ class SileroVAD:
             trust_repo=True,
         )
         self._model.eval()
-        print("Silero VAD pronto.")
+        logging.getLogger(__name__).info("Silero VAD pronto.")
 
     def reset_state(self) -> None:
         self._model.reset_states()
 
     def is_speech(self, pcm_chunk: bytes) -> tuple[bool, float]:
-        """Classifica um único chunk PCM-16 de 512 amostras.
-
-        Parâmetros
-        ----------
-        pcm_chunk : bytes
-            1024 bytes de áudio PCM-16 LE mono (512 amostras * 2 bytes).
-
-        Retorna
-        -------
-        is_speech : bool
-            True se a probabilidade excede threshold.
-        prob : float
-            Probabilidade bruta de fala estimada pelo modelo.
-        """
         audio = np.frombuffer(pcm_chunk, dtype=np.int16).astype(np.float32) / 32768.0
-        tensor = torch.from_numpy(audio).unsqueeze(0)  # (1, 512)
+        tensor = torch.from_numpy(audio).unsqueeze(0)
 
         with torch.no_grad():
             prob = self._model(tensor, self.sample_rate).item()

@@ -1,5 +1,6 @@
 -r requirements.txt
 
-pytest
-pytest-asyncio
+# Dev / testes
+pytest>=9.0.0
+pytest-asyncio>=1.0.0
 ruff

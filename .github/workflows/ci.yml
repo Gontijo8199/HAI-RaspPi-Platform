@@ -19,9 +19,7 @@ jobs:
           python-version: "3.12"
 
       - name: Instalar Ruff
-        run: |
-          python -m pip install --upgrade pip
-          pip install ruff
+        run: pip install ruff
 
       - name: Verificar lint
         run: ruff check .
@@ -41,29 +39,30 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Instalar dependências
+      - name: Dependências do sistema
         run: |
-            python -m pip install --upgrade pip
+          sudo apt-get update
+          sudo apt-get install -y portaudio19-dev espeak-ng libespeak-ng-dev
 
-            sudo apt-get update
-            sudo apt-get install -y portaudio19-dev
+      - name: Instalar torch CPU
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
 
-            pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Instalar dependências Python
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
 
-            pip install -r requirements.txt
-
-            pip install -r requirements-dev.txt
-
-      - name: Criar arquivos de configuração
+      - name: Criar configurações de teste
         run: |
           mkdir -p config
 
-          cat << EOF > config/secrets.toml
+          cat > config/secrets.toml << 'TOML'
           [api]
           key = "test-key"
-          EOF
+          TOML
 
-          cat << EOF > config/settings.toml
+          cat > config/settings.toml << 'TOML'
           [api]
           model = "gemma-4-26b-a4b-it"
 
@@ -76,8 +75,16 @@ jobs:
           [vad]
           threshold = 0.5
           preroll_ms = 500
-          silence_ms = 750
-          EOF
+          silence_ms = 700
+          interim_interval_ms = 1500
+
+          [tts]
+          backend = "espeak"
+          piper_bin = "/opt/piper/piper/piper"
+          piper_model = "/opt/piper/voices/pt_BR-faber-medium.onnx"
+          rate = 160
+          lang = "pt-br"
+          TOML
 
       - name: Verificar sintaxe
         run: python -m compileall .
@@ -85,36 +92,36 @@ jobs:
       - name: Executar testes
         env:
           PYTHONPATH: .
-        run: python -m pytest tests/ -v
+        run: pytest tests/ -v --tb=short
 
   docker:
     name: Build Docker (multi-arch)
     runs-on: ubuntu-latest
     needs: test
-  
+
     permissions:
       contents: read
       packages: write
-  
+
     steps:
       - uses: actions/checkout@v4
-  
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
-  
+
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
-  
+
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-  
+
       - name: Set image name
         run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
-  
+
       - name: Build and push (multi-arch)
         uses: docker/build-push-action@v6
         with:

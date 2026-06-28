@@ -1,9 +1,26 @@
 # requirements.txt
+# pip install -r requirements.txt
 
-#   pip install -r requirements.txt
-
+# Áudio
 PyAudio>=0.2.14
+
+# STT
 faster-whisper>=1.2.0
+numpy>=1.24.0
+
+# VAD (Silero)
+torch>=2.0.0
+
+# LLM
 google-genai>=1.0.0
-pytest>=9.0.0
-pytest-asyncio>=1.0.0
+
+# TTS
+pyttsx3>=2.90
+
+# espeak-ng via apt: sudo apt install espeak-ng
+# piper via github: github.com/rhasspy/piper/releases
+
+
+# pip install torch --index-url https://download.pytorch.org/whl/cpu
+# sudo apt install python3-torch
+# não baixar versão CUDA
