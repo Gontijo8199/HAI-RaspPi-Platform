@@ -7,6 +7,7 @@ FROM python:3.12-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     python3-dev \
+    python3-tk \
     portaudio19-dev \
     libsndfile1 \
     espeak-ng \
@@ -43,6 +44,14 @@ COPY . .
 
 # secrets.toml deve ser montado em runtime — nunca buildar com ele
 VOLUME ["/app/config"]
+
+# NOTA: python3-tk via apt (acima) provê o tkinter para o Python do sistema.
+# A imagem oficial python:3.12-slim compila seu próprio interpretador em
+# /usr/local/bin/python, então valide com `python -c "import tkinter"` após
+# o build. Além disso, exibir a janela X11 de dentro do container exige
+# repassar o socket do X (-e DISPLAY=$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix)
+# no `docker run` — não incluído no exemplo padrão deste README, que roda
+# só com [display] enabled=false (modo headless).
 
 # Variáveis de ambiente para os caminhos do Piper dentro do container
 ENV PIPER_BIN=/opt/piper/piper/piper

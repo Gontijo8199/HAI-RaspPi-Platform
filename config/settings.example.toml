@@ -9,3 +9,9 @@ language = "pt"
 
 [display]
 driver = ""
+enabled = true       
+fullscreen = true   
+width = 1024   
+height = 600
+font_size = 20
+flashcard_width = 340 

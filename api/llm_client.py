@@ -37,6 +37,28 @@ class LLMClient:
         - Se o aluno fizer uma pergunta de acompanhamento, responda considerando o que já foi dito.
     """
 
+    FLASHCARD_SYSTEM_PROMPT = """\
+        Você gera flash-cards de resumo para um tutor virtual escolar.
+
+        Dada a transcrição de uma pergunta de um aluno do Ensino Fundamental II,
+        produza um flash-card curto em Markdown identificando o tópico/matéria
+        sendo discutido. Formato obrigatório:
+
+        ## <Título curto do tópico, 2 a 5 palavras>
+        **Resumo:** <uma frase objetiva sobre o que está sendo discutido>
+        - <ponto-chave 1, até 8 palavras>
+        - <ponto-chave 2, até 8 palavras>
+
+        Regras:
+        - Responda somente com o Markdown acima, sem texto antes ou depois.
+        - Português brasileiro, direto, sem jargão técnico.
+        - No máximo 3 bullets.
+        - Se a pergunta for incompreensível, use "## Pergunta não identificada"
+          como título e um resumo genérico.
+    """
+
+    # TODO: Exportar prompts para arquivos externos
+
     def __init__(
         self,
         api_key: str,
@@ -93,6 +115,27 @@ class LLMClient:
         async for token in self.send_stream(transcription):
             tokens.append(token)
         return "".join(tokens).strip()
+
+    async def generate_flashcard(self, transcription: str) -> str:
+
+        mensagem = f'Pergunta do aluno:\n"""\n{transcription}\n"""'
+        loop = asyncio.get_running_loop()
+
+        def _call() -> str:
+            response = self._client.models.generate_content(
+                model=self.model,
+                contents=mensagem,
+                config=types.GenerateContentConfig(
+                    system_instruction=self.FLASHCARD_SYSTEM_PROMPT,
+                ),
+            )
+            return (response.text or "").strip()
+
+        try:
+            return await asyncio.wait_for(loop.run_in_executor(None, _call), timeout=self.timeout)
+        except Exception as exc:
+            logger.error("Erro ao gerar flashcard: %s", exc)
+            return ""
 
     def resetar_sessao(self) -> None:
         self._chat = self._nova_sessao()

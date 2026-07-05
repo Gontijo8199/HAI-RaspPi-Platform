@@ -21,6 +21,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 from api.llm_client import LLMClient
 from core.pipeline import HAIPipeline
+from display.markdown_display import MarkdownDisplay
 from stt.capture import WhisperStream
 from stt.ptt import PttStream
 from tts.speaker import TTSSpeaker
@@ -64,11 +65,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def display_response(text: str) -> None:
-    # TODO: integrar com display/driver quando disponível
-    pass
-
-
 async def async_main(ptt: bool, tts_backend: str | None, no_tts: bool) -> None:
     settings, secrets = load_config()
 
@@ -109,11 +105,30 @@ async def async_main(ptt: bool, tts_backend: str | None, no_tts: bool) -> None:
     # LLM client com streaming
     llm_client = LLMClient(api_key=api_key, model=model)
 
+    # Display: janela X11 no HDMI com resposta em Markdown + flash-card do tópico. Se desativado ou sem servidor X, cai em modo headless sozinho.
+    display_cfg = settings.get("display", {})
+    if display_cfg.get("enabled", True):
+        display = MarkdownDisplay(
+            fullscreen=display_cfg.get("fullscreen", True),
+            width=display_cfg.get("width", 1024),
+            height=display_cfg.get("height", 600),
+            font_size=display_cfg.get("font_size", 20),
+            flashcard_width=display_cfg.get("flashcard_width", 340),
+        )
+        if not display.available:
+            logger.warning(
+                "Display X11 indisponível — rodando sem exibição gráfica "
+                "(resposta continua no terminal e no áudio)."
+            )
+    else:
+        display = None
+        logger.info("Display desativado via config/settings.toml [display] enabled=false.")
+
     # Pipeline orquestrador
     pipeline = HAIPipeline(
         llm_client=llm_client,
         tts=tts if tts else _NullTTS(),
-        display_fn=display_response,
+        display=display,
     )
 
     # STT (VAD ou PTT)
@@ -155,6 +170,8 @@ async def async_main(ptt: bool, tts_backend: str | None, no_tts: bool) -> None:
         await pipeline.wait_pending()
         if tts:
             tts.shutdown()
+        if display:
+            display.shutdown()
 
 
 class _NullTTS:

@@ -39,6 +39,9 @@ def mock_llm_client():
             yield token
 
     client.send_stream = MagicMock(side_effect=_fake_stream)
+    client.generate_flashcard = AsyncMock(
+        return_value="## Tópico de teste\n**Resumo:** um resumo qualquer.\n- ponto 1\n- ponto 2"
+    )
     return client
 
 
@@ -50,3 +53,14 @@ def mock_tts():
     tts.shutdown = MagicMock()
     tts.speak_stream = AsyncMock()
     return tts
+
+
+@pytest.fixture
+def mock_display():
+    display = MagicMock()
+    display.show_response = MagicMock()
+    display.show_flashcard = MagicMock()
+    display.clear = MagicMock()
+    display.shutdown = MagicMock()
+    display.available = False
+    return display

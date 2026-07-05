@@ -96,13 +96,10 @@ class WhisperStream:
         self._pipeline_task: asyncio.Task | None = None
 
         # Task da transcrição parcial em andamento.
-        # Cancelada quando a transcrição final está pronta — garante que
-        # apenas a transcrição final chega ao LLM.
+        # Cancelada quando a transcrição final está pronta — garante que apenas a transcrição final chega ao LLM.
         self._interim_task: asyncio.Task | None = None
 
-    # ------------------------------------------------------------------
     # Interface pública
-    # ------------------------------------------------------------------
 
     async def start(self) -> None:
         self._is_running = True
@@ -121,9 +118,7 @@ class WhisperStream:
         self._mic.stop()
         logger.info("WhisperStream encerrado.")
 
-    # ------------------------------------------------------------------
     # Loop interno
-    # ------------------------------------------------------------------
 
     async def _pipeline_loop(self) -> None:
         recording: list[bytes] = []

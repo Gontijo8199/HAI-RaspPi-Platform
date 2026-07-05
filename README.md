@@ -4,9 +4,10 @@ Tutor virtual de apoio escolar embarcado: capta a voz do aluno, transcreve local
 
 ## Pipeline
 
-```
-voz → VAD (Silero) → STT (Whisper) → LLM API (streaming) → TTS (Piper) → speaker
-```
+<pre>
+voz -> VAD (Silero) -> STT (Whisper) -> LLM API (streaming) -> TTS (Piper) -> speaker
+                                              └>  Display (Tkinter) -> Tela
+</pre>
 
 Cada etapa é assíncrona e não-bloqueante:
 - O microfone continua ouvindo enquanto o Whisper transcreve.
@@ -35,7 +36,7 @@ Cada etapa é assíncrona e não-bloqueante:
 ### 1. Dependências do sistema
 
 ```bash
-sudo apt install -y portaudio19-dev libsndfile1 espeak-ng libespeak-ng-dev
++sudo apt install -y portaudio19-dev libsndfile1 espeak-ng libespeak-ng-dev python3-tk
 ```
 
 ### 2. Piper TTS
@@ -117,6 +118,40 @@ docker run -it --rm \
 docker buildx build --platform linux/amd64,linux/arm64 -t hai .
 ```
 
+## Display (janela X11 no HDMI)
+
+O `display/` renderiza a resposta do tutor em Markdown numa janela X11,
+mais um **flash-card** com o resumo do tópico da pergunta atual, gerado
+pela LLM a cada utterance:
+
+<pre>
+┌──────────────────────────────────────┬──────────────────┐
+│                                      │ Resumo do        │
+│  ## Resposta em Markdown do tutor    │    tópico        │
+│  negrito, itálico, código,           │                  |
+│  listas, blocos de código etc.       │ ## Fotossíntese  │
+│                                      │ Resumo: ...      │
+│                                      │ - ponto 1        │
+│                                      │ - ponto 2        │
+└──────────────────────────────────────┴──────────────────┘
+</pre>
+Se não houver `tkinter` disponível ou nenhum servidor X (`$DISPLAY`), o
+driver cai automaticamente em modo headless: o pipeline continua
+funcionando normalmente (texto no terminal + áudio), só sem a janela.
+
+Configuração em `config/settings.toml`:
+
+```toml
+[display]
+enabled = true
+fullscreen = true 
+width = 1024 
+height = 600
+font_size = 20
+flashcard_width = 340 
+```
+
+
 ## Configuração (`config/settings.toml`)
 
 ```toml
@@ -141,6 +176,14 @@ piper_bin   = "/home/rafa/piper/piper/piper"
 piper_model = "/home/rafa/piper/voices/pt_BR-faber-medium.onnx"
 rate = 160
 lang = "pt-br"
+
+[display]
+enabled = true
+fullscreen = true 
+width = 1024 
+height = 600
+font_size = 20
+flashcard_width = 340 
 ```
 
 ## Testes
