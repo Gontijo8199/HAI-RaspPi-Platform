@@ -79,6 +79,13 @@ class MicrophoneStream:
     async def read_chunk(self) -> bytes:
         return await self._queue.get()
 
+    def drain_queue(self) -> None:
+        while not self._queue.empty():
+            try:
+                self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
     def get_preroll(self) -> bytes:
         return b"".join(self._preroll)
 

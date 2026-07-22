@@ -91,6 +91,7 @@ class PttStream:
             if not self._is_running:
                 break
 
+            self._mic.drain_queue()
             print("[GRAVANDO... pressione Enter para encerrar]")
             recording: list[bytes] = []
 
