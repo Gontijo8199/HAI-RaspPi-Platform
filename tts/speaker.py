@@ -7,7 +7,6 @@ Backends suportados:
 Design:
 - Thread daemon consome uma Queue de frases sequencialmente.
 - speak() enfileira e retorna imediatamente (fire-and-forget).
-- speak_stream() agrupa tokens em frases e inicia fala antes da resposta terminar.
 - stop_speaking() interrompe síntese atual e limpa fila pendente.
 """
 
@@ -15,7 +14,6 @@ import logging
 import queue
 import subprocess
 import threading
-from collections.abc import AsyncIterator
 
 logger = logging.getLogger(__name__)
 
@@ -71,50 +69,15 @@ class TTSSpeaker:
         if text.strip():
             self._queue.put(text)
 
-    async def speak_stream(self, token_stream: AsyncIterator[str]) -> None:
-        buffer = ""
-        SENTENCE_ENDS = {".", "?", "!", "\n"}
-        MIN_CHARS = 40
-
-        async for token in token_stream:
-            buffer += token
-
-            flush_idx = -1
-            for i, ch in enumerate(buffer):
-                if ch in SENTENCE_ENDS:
-                    flush_idx = i
-                    break
-
-            if flush_idx >= 0:
-                phrase = buffer[: flush_idx + 1].strip()
-                buffer = buffer[flush_idx + 1 :]
-                if phrase:
-                    self.speak(phrase)
-            elif len(buffer) >= MIN_CHARS:
-                comma_idx = buffer.rfind(",")
-                if comma_idx > MIN_CHARS // 2:
-                    phrase = buffer[: comma_idx + 1].strip()
-                    buffer = buffer[comma_idx + 1 :]
-                else:
-                    phrase = buffer.strip()
-                    buffer = ""
-                if phrase:
-                    self.speak(phrase)
-
-        if buffer.strip():
-            self.speak(buffer.strip())
-
     def stop_speaking(self) -> None:
-        # Esvazia fila
+        with self._proc_lock:
+            if self._current_proc and self._current_proc.poll() is None:
+                self._current_proc.terminate()
         while not self._queue.empty():
             try:
                 self._queue.get_nowait()
             except queue.Empty:
                 break
-        # Mata processo em andamento (Piper ou espeak)
-        with self._proc_lock:
-            if self._current_proc and self._current_proc.poll() is None:
-                self._current_proc.terminate()
         self._queue.put(_INTERRUPT)
 
     def shutdown(self) -> None:

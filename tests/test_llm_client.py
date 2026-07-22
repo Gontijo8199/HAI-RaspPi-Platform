@@ -6,11 +6,9 @@ import pytest
 @patch("google.genai.Client")
 @pytest.mark.asyncio
 async def test_send_retorna_texto(mock_genai):
-    # Simula stream com um único chunk
-    mock_chunk = MagicMock()
-    mock_chunk.text = "Resposta do tutor."
-    mock_genai.return_value.models.generate_content_stream.return_value = iter([mock_chunk])
-    mock_genai.return_value.chats.create.return_value = MagicMock()
+    mock_chat = MagicMock()
+    mock_chat.send_message_stream.return_value = iter([MagicMock(text="Resposta do tutor.")])
+    mock_genai.return_value.chats.create.return_value = mock_chat
 
     from api.llm_client import LLMClient
 
@@ -23,10 +21,9 @@ async def test_send_retorna_texto(mock_genai):
 @patch("google.genai.Client")
 @pytest.mark.asyncio
 async def test_send_strip_espacos(mock_genai):
-    mock_chunk = MagicMock()
-    mock_chunk.text = "  texto com espaços  "
-    mock_genai.return_value.models.generate_content_stream.return_value = iter([mock_chunk])
-    mock_genai.return_value.chats.create.return_value = MagicMock()
+    mock_chat = MagicMock()
+    mock_chat.send_message_stream.return_value = iter([MagicMock(text="  texto com espaços  ")])
+    mock_genai.return_value.chats.create.return_value = mock_chat
 
     from api.llm_client import LLMClient
 
@@ -40,8 +37,9 @@ async def test_send_strip_espacos(mock_genai):
 @pytest.mark.asyncio
 async def test_send_stream_produz_tokens(mock_genai):
     chunks = [MagicMock(text=t) for t in ["Olá, ", "como ", "posso ", "ajudar?"]]
-    mock_genai.return_value.models.generate_content_stream.return_value = iter(chunks)
-    mock_genai.return_value.chats.create.return_value = MagicMock()
+    mock_chat = MagicMock()
+    mock_chat.send_message_stream.return_value = iter(chunks)
+    mock_genai.return_value.chats.create.return_value = mock_chat
 
     from api.llm_client import LLMClient
 
@@ -62,8 +60,9 @@ async def test_send_stream_ignora_chunks_vazios(mock_genai):
         MagicMock(text=""),
         MagicMock(text="!"),
     ]
-    mock_genai.return_value.models.generate_content_stream.return_value = iter(chunks)
-    mock_genai.return_value.chats.create.return_value = MagicMock()
+    mock_chat = MagicMock()
+    mock_chat.send_message_stream.return_value = iter(chunks)
+    mock_genai.return_value.chats.create.return_value = mock_chat
 
     from api.llm_client import LLMClient
 

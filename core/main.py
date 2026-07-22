@@ -178,10 +178,6 @@ class _NullTTS:
     def speak(self, text: str) -> None:
         pass
 
-    async def speak_stream(self, token_stream) -> None:
-        async for _ in token_stream:
-            pass
-
     def stop_speaking(self) -> None:
         pass
 

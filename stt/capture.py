@@ -179,6 +179,7 @@ class WhisperStream:
                     silent_frames = 0
                     speech_frames = 0
                     self._mic.clear_preroll()
+                    self._vad.reset_state()
 
                     # Cancela o parcial antes de disparar o final
                     if self._interim_task and not self._interim_task.done():

@@ -1,7 +1,4 @@
-import asyncio
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 
 def _make_speaker(backend="espeak"):
@@ -52,23 +49,3 @@ def test_stop_speaking_limpa_fila():
             items.append(speaker._queue.get_nowait())
         assert all(i is _INTERRUPT for i in items) or len(items) == 0
         speaker.shutdown()
-
-
-@pytest.mark.asyncio
-async def test_speak_stream_agrupa_frases():
-    from tts.speaker import TTSSpeaker
-
-    enfileirados = []
-
-    async def token_gen():
-        for t in ["Olá", ",", " como", " vai", "?", " Tudo", " bem", "."]:
-            yield t
-
-    with patch("tts.speaker.subprocess.Popen"):
-        speaker = TTSSpeaker(backend="espeak")
-        speaker.speak = lambda text: enfileirados.append(text)
-        await speaker.speak_stream(token_gen())
-        speaker.shutdown()
-
-    assert len(enfileirados) >= 1
-    assert all(isinstance(f, str) and len(f) > 0 for f in enfileirados)

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import threading
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -73,38 +74,32 @@ class LLMClient:
     async def send_stream(self, transcription: str) -> AsyncIterator[str]:
         mensagem = f'Transcrição do aluno:\n"""\n{transcription}\n"""'
 
-        # Fila de comunicação entre a thread de I/O e o event loop
         queue: asyncio.Queue[str | None] = asyncio.Queue()
         loop = asyncio.get_running_loop()
+        cancelled = threading.Event()
 
         def _run_stream() -> None:
             try:
-                # A SDK sincrona itera sobre chunks; cada um vai para a fila
-                for chunk in self._client.models.generate_content_stream(
-                    model=self.model,
-                    contents=mensagem,
-                    config=types.GenerateContentConfig(
-                        system_instruction=self.SYSTEM_PROMPT,
-                    ),
-                ):
+                for chunk in self._chat.send_message_stream(mensagem):
+                    if cancelled.is_set():
+                        break
                     text = chunk.text or ""
                     if text:
                         loop.call_soon_threadsafe(queue.put_nowait, text)
             except Exception as exc:
                 logger.error("Erro no stream LLM: %s", exc)
             finally:
-                # Sinaliza fim do stream com sentinela None
-                loop.call_soon_threadsafe(queue.put_nowait, None)
+                if not cancelled.is_set():
+                    loop.call_soon_threadsafe(queue.put_nowait, None)
 
-        # Inicia a thread sem bloquear o event loop
         asyncio.get_running_loop().run_in_executor(None, _run_stream)
 
-        # Consome a fila de forma assíncrona
         while True:
             try:
                 token = await asyncio.wait_for(queue.get(), timeout=self.timeout)
             except TimeoutError:
                 logger.warning("Timeout aguardando token do LLM.")
+                cancelled.set()
                 break
             if token is None:
                 break

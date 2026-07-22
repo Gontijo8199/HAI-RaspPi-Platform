@@ -51,7 +51,6 @@ def mock_tts():
     tts.speak = MagicMock()
     tts.stop_speaking = MagicMock()
     tts.shutdown = MagicMock()
-    tts.speak_stream = AsyncMock()
     return tts
 
 
