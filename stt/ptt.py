@@ -127,18 +127,8 @@ class PttStream:
                 break
 
             if self._muted:
-                print(
-                    f"[O tutor está respondendo — aguarde ou pressione {tecla} para cancelar.]"
-                )
-                continue
-
-            self._mic.drain_queue()
-            print(
-                f"[GRAVANDO... pressione Enter para encerrar, {tecla} para descartar]"
-            )
                 print(f"[O tutor está respondendo — aguarde ou pressione {tecla} para cancelar.]")
                 continue
-
             self._mic.drain_queue()
             print(f"[GRAVANDO... pressione Enter para encerrar, {tecla} para descartar]")
             recording: list[bytes] = []
