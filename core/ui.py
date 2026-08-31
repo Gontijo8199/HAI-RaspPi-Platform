@@ -65,11 +65,15 @@ def thinking(utterance: str) -> None:
 
 
 def speaking() -> None:
+<<<<<<< HEAD
     print(
         f"\r{_paint(_MAGENTA, f'● Falando... ({_CANCEL_HINT} interrompe)')}\033[K",
         end="",
         flush=True,
     )
+=======
+    print(f"\r{_paint(_MAGENTA, f'● Falando... ({_CANCEL_HINT} interrompe)')}\033[K", end="", flush=True)
+>>>>>>> refs/remotes/origin/main
 
 
 def cancelled() -> None:
