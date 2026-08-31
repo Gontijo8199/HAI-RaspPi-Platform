@@ -56,8 +56,9 @@ class TTSSpeaker:
         self._volume = volume
         self._lang = lang
 
-        # Processo Piper em andamento (para interrupção)
-        self._current_proc: subprocess.Popen | None = None
+        # Processos em andamento (para interrupção imediata via Esc)
+        self._current_proc: subprocess.Popen | None = None  # player de áudio
+        self._source_proc: subprocess.Popen | None = None  # gerador (piper)
         self._proc_lock = threading.Lock()
 
         self._queue: queue.Queue = queue.Queue()
@@ -69,10 +70,24 @@ class TTSSpeaker:
         if text.strip():
             self._queue.put(text)
 
-    def stop_speaking(self) -> None:
+    def is_busy(self) -> bool:
+        """True se há frase na fila ou áudio sendo reproduzido agora."""
+        if not self._queue.empty():
+            return True
         with self._proc_lock:
-            if self._current_proc and self._current_proc.poll() is None:
-                self._current_proc.terminate()
+            player_running = self._current_proc is not None and self._current_proc.poll() is None
+            source_running = self._source_proc is not None and self._source_proc.poll() is None
+        return player_running or source_running
+
+    def stop_speaking(self) -> None:
+        """Interrompe a fala atual, mata os processos de áudio e limpa a fila."""
+        with self._proc_lock:
+            for proc in (self._current_proc, self._source_proc):
+                if proc is not None and proc.poll() is None:
+                    try:
+                        proc.terminate()
+                    except Exception as exc:
+                        logger.debug("Falha ao terminar processo TTS: %s", exc)
         while not self._queue.empty():
             try:
                 self._queue.get_nowait()
@@ -137,6 +152,7 @@ class TTSSpeaker:
                         stderr=subprocess.DEVNULL,
                     )
                     piper_proc.stdout.close()
+                    self._source_proc = piper_proc
                     self._current_proc = aplay_proc
 
                 # Envia texto para o Piper
@@ -157,11 +173,14 @@ class TTSSpeaker:
                 with self._proc_lock:
                     if self._current_proc:
                         self._current_proc.terminate()
+                    if self._source_proc:
+                        self._source_proc.terminate()
             except Exception as exc:
                 logger.warning("Erro TTS Piper: %s", exc)
             finally:
                 with self._proc_lock:
                     self._current_proc = None
+                    self._source_proc = None
 
     def _worker_espeak(self) -> None:
         while True:

@@ -9,6 +9,12 @@ Fluxo por utterance:
    que fica pronto — não bloqueia nem a fala nem a resposta principal.
 5. TTS sintetiza e reproduz em thread daemon, sem bloquear novas utterances.
 6. Próximo utterance pode iniciar enquanto o TTS ainda fala o anterior.
+
+Controle:
+- run_turn() é a variante awaitável de process_utterance(): o orquestrador
+  aguarda o turno terminar (ou ser cancelado) antes de retomar o microfone.
+- cancel_active() interrompe imediatamente o stream LLM (camada de rede),
+  as tasks do pipeline e o áudio do TTS — acionada pela tecla de cancelamento.
 """
 
 import asyncio
@@ -16,6 +22,7 @@ import logging
 import re
 
 from api.llm_client import LLMClient
+from core import ui
 from tts.speaker import TTSSpeaker
 
 logger = logging.getLogger(__name__)
@@ -62,7 +69,15 @@ class HAIPipeline:
         self._display_fn = display_fn
         self._active_tasks: set[asyncio.Task] = set()
 
+    # Controle de turnos
+
+    @property
+    def busy(self) -> bool:
+        """True se há pelo menos um turno em andamento."""
+        return any(not t.done() for t in self._active_tasks)
+
     def process_utterance(self, utterance: str) -> None:
+        """Dispara o turno fire-and-forget (API legada, usada pelos testes)."""
         if not _VALID_TEXT.search(utterance):
             logger.debug("Utterance ignorada (sem conteúdo válido): %r", utterance)
             return
@@ -73,6 +88,37 @@ class HAIPipeline:
         self._active_tasks.add(task)
         task.add_done_callback(self._active_tasks.discard)
 
+    async def run_turn(self, utterance: str) -> None:
+        """Processa um utterance aguardando o término (modo controlado).
+
+        Levanta CancelledError se cancel_active() interromper o turno —
+        o chamador decide como retomar (ex.: reabrir o microfone).
+        """
+        if not _VALID_TEXT.search(utterance):
+            logger.debug("Utterance ignorada (sem conteúdo válido): %r", utterance)
+            return
+
+        task = asyncio.create_task(self._handle_utterance(utterance), name=f"turn-{id(utterance)}")
+        self._active_tasks.add(task)
+        task.add_done_callback(self._active_tasks.discard)
+        await task
+
+    def cancel_active(self) -> bool:
+        """Cancela todo turno em andamento: stream LLM, tasks e áudio do TTS.
+
+        Retorna True se algo estava em andamento. Idempotente.
+        """
+        had_work = False
+        for task in list(self._active_tasks):
+            if not task.done():
+                task.cancel()
+                had_work = True
+        self._llm.cancel_stream()
+        self._tts.stop_speaking()
+        return had_work
+
+    # Interno
+
     async def _handle_utterance(self, utterance: str) -> None:
         # Verifica trigger de reset
         if utterance.strip().lower() in RESET_TRIGGERS:
@@ -81,12 +127,18 @@ class HAIPipeline:
             if self._display is not None:
                 try:
                     self._display.clear()
+                    self._display.show_status("Sessão reiniciada")
                 except Exception as exc:
                     logger.warning("Erro ao limpar display: %s", exc)
-            print("\n[SESSÃO REINICIADA] Histórico apagado.")
+            ui.success("\n[SESSÃO REINICIADA] Histórico apagado.")
             return
 
-        print(f'\n[ENVIANDO PARA LLM] -> "{utterance}"')
+        ui.thinking(utterance)
+        if self._display is not None:
+            try:
+                self._display.show_status("Pensando...")
+            except Exception:
+                pass
 
         # Resposta principal (streaming) e flash-card do tópico (não-stream) rodam concorrentemente: o flash-card não atrasa a fala nem o texto.
         if self._display is not None and hasattr(self._llm, "generate_flashcard"):
@@ -114,6 +166,7 @@ class HAIPipeline:
                     tts_buffer = tts_buffer[flush_idx + 1 :]
                     if phrase:
                         self._tts.speak(phrase)
+                        ui.speaking()
                 elif len(tts_buffer) >= _MIN_TTS_CHARS:
                     comma_idx = tts_buffer.rfind(",")
                     if comma_idx > _MIN_TTS_CHARS // 2:
@@ -124,14 +177,19 @@ class HAIPipeline:
                         tts_buffer = ""
                     if phrase:
                         self._tts.speak(phrase)
+                        ui.speaking()
 
             # Flush do buffer restante
             if tts_buffer.strip():
                 self._tts.speak(tts_buffer.strip())
 
+        except asyncio.CancelledError:
+            ui.cancelled_inline()
+            raise
+
         except Exception as exc:
             logger.error("Erro no pipeline LLM→TTS: %s", exc)
-            print(f"\n[ERRO NA API] {exc}")
+            ui.error(f"\n[ERRO NA API] {exc}")
             return
 
         full_response = "".join(response_parts).strip()
@@ -155,6 +213,8 @@ class HAIPipeline:
     async def _generate_flashcard(self, utterance: str) -> None:
         try:
             flashcard_md = await self._llm.generate_flashcard(utterance)
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.warning("Erro ao gerar flashcard: %s", exc)
             return

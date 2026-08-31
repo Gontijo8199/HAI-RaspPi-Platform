@@ -89,6 +89,7 @@ class MarkdownDisplay:
         self._root: Any = None
         self._response_text: Any = None
         self._flashcard_text: Any = None
+        self._status_label: Any = None
 
         self._thread = threading.Thread(target=self._run, daemon=True, name="display-worker")
         self._thread.start()
@@ -104,6 +105,10 @@ class MarkdownDisplay:
 
     def show_flashcard(self, markdown_text: str) -> None:
         self._queue.put(("flashcard", markdown_text))
+
+    def show_status(self, text: str) -> None:
+        """Atualiza a barra de estado na base da janela ('Ouvindo...', etc.)."""
+        self._queue.put(("status", text))
 
     def clear(self) -> None:
         self._queue.put(("clear", None))
@@ -185,6 +190,7 @@ class MarkdownDisplay:
         container.columnconfigure(0, weight=1)
         container.columnconfigure(1, weight=0)
         container.rowconfigure(0, weight=1)
+        container.rowconfigure(1, weight=0)
 
         response_text = tk.Text(
             container,
@@ -235,9 +241,22 @@ class MarkdownDisplay:
         self._configure_tags(response_text, body_font, mono_font)
         self._configure_tags(flashcard_text, card_font, mono_font)
 
+        status_label = tk.Label(
+            container,
+            text="Iniciando...",
+            bg=self._bg,
+            fg="#7fb0ff",
+            font=tkfont.Font(family=self._font_family, size=max(self._font_size - 6, 8)),
+            anchor="w",
+            padx=16,
+            pady=4,
+        )
+        status_label.grid(row=1, column=0, columnspan=2, sticky="ew")
+
         self._root = root
         self._response_text = response_text
         self._flashcard_text = flashcard_text
+        self._status_label = status_label
 
     def _configure_tags(self, widget: Any, body_font: Any, mono_font: Any) -> None:
         base_size = body_font.cget("size")
@@ -282,6 +301,9 @@ class MarkdownDisplay:
                 elif kind == "clear":
                     self._render(self._response_text, "")
                     self._render(self._flashcard_text, "")
+                elif kind == "status":
+                    if self._status_label is not None:
+                        self._status_label.configure(text=payload)
         except queue.Empty:
             pass
         self._root.after(100, self._poll_queue)

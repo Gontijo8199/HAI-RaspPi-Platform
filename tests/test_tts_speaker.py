@@ -49,3 +49,56 @@ def test_stop_speaking_limpa_fila():
             items.append(speaker._queue.get_nowait())
         assert all(i is _INTERRUPT for i in items) or len(items) == 0
         speaker.shutdown()
+
+
+# ---------- Controle: is_busy e interrupção de processos ----------
+
+
+def test_is_busy_reflete_fila():
+    speaker = _make_speaker()
+    try:
+        assert speaker.is_busy() is False
+
+        # Worker parado (shutdown consumiu o _STOP): fila determinística.
+        speaker.shutdown()
+        speaker._queue.put("frase pendente")
+        assert speaker.is_busy() is True
+
+        while not speaker._queue.empty():
+            speaker._queue.get_nowait()
+        assert speaker.is_busy() is False
+    finally:
+        speaker.shutdown()
+
+
+def test_is_busy_detecta_processo_de_audio_rodando():
+    speaker = _make_speaker()
+    try:
+        speaker.shutdown()  # worker parado, fila vazia
+        proc = MagicMock()
+        proc.poll.return_value = None  # em execução
+        speaker._current_proc = proc
+        assert speaker.is_busy() is True
+
+        proc.poll.return_value = 0  # terminou
+        assert speaker.is_busy() is False
+    finally:
+        speaker.shutdown()
+
+
+def test_stop_speaking_termina_player_e_fonte():
+    """Esc deve matar tanto o player (aplay) quanto o gerador (piper)."""
+    speaker = _make_speaker()
+    try:
+        player, fonte = MagicMock(), MagicMock()
+        player.poll.return_value = None
+        fonte.poll.return_value = None
+        speaker._current_proc = player
+        speaker._source_proc = fonte
+
+        speaker.stop_speaking()
+
+        player.terminate.assert_called_once()
+        fonte.terminate.assert_called_once()
+    finally:
+        speaker.shutdown()

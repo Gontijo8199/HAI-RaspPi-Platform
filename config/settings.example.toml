@@ -7,6 +7,19 @@ model = ""
 model_path = ""
 language = "pt"
 
+[vad]
+threshold = 0.5
+preroll_ms = 500
+silence_ms = 700
+interim_interval_ms = 1500
+
+[tts]
+backend = "piper"             # piper | espeak | pyttsx3
+piper_bin   = "/home/pi/piper/piper/piper"
+piper_model = "/home/pi/piper/voices/pt_BR-faber-medium.onnx"
+rate = 160
+lang = "pt-br"
+
 [display]
 driver = ""
 enabled = true       
@@ -15,3 +28,14 @@ width = 1024
 height = 600
 font_size = 20
 flashcard_width = 340 
+
+[ux]
+# Pausa o microfone enquanto o tutor processa e fala a resposta
+# (evita captar o próprio tutor ou falas ao acaso durante o turno).
+# Desative para permitir interrupção por voz (barge-in) — ou use --allow-barge-in.
+mute_while_responding = true
+
+# Tecla que cancela o pedido em andamento (fala do TTS + stream do LLM) e
+# descarta gravação no modo PTT. Evite "esc": o display Tk usa Esc para sair
+# da tela cheia. Opções: space | esc | enter | tab | backspace | ctrl+c | letra.
+cancel_key = "space"

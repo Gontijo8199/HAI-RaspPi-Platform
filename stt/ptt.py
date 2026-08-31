@@ -19,8 +19,22 @@ class PttStream:
         utterance = await stt.get_utterance()
         stt.stop()
 
+    Controles:
+    - Enter inicia/encerra a gravação.
+    - A tecla de cancelamento (padrão Espaço, configurável via
+      [ux] cancel_key) durante a gravação descarta o áudio e volta a aguardar.
+    - Enter enquanto o tutor responde é ignorado (mic mutado); a tecla de
+      cancelamento aborta o pedido — tratado pelo orquestrador via pipeline.
+
     Parâmetros
     ----------
+    hotkeys : HotkeyListener | None
+        Listener compartilhado de teclas. Quando fornecido, as teclas chegam
+        por ele (stdin fica em modo cbreak, gerido por ele). Quando None,
+        cai no comportamento legado de ler linhas com sys.stdin.readline —
+        sem suporte a cancelamento, mas mantém compatibilidade com os testes.
+    cancel_key : str
+        Token canônico da tecla de cancelamento (saída de core.hotkeys.parse_key).
     language : str
         Código BCP-47 para o Whisper (ex.: 'pt', 'en').
     sample_rate : int
@@ -46,6 +60,8 @@ class PttStream:
         whisper_device: str = "cpu",
         whisper_compute_type: str = "int8",
         device_index: int | None = None,
+        hotkeys=None,
+        cancel_key: str = "space",
     ):
         self._sample_rate = sample_rate
 
@@ -61,10 +77,13 @@ class PttStream:
             compute_type=whisper_compute_type,
             language=language,
         )
+        self._hotkeys = hotkeys if (hotkeys is not None and hotkeys.available) else None
+        self._cancel_key = cancel_key
 
         self._utterance_queue: asyncio.Queue[str] = asyncio.Queue()
         self._is_running = False
         self._pipeline_task: asyncio.Task | None = None
+        self._muted = False
 
     async def start(self) -> None:
         self._is_running = True
@@ -83,16 +102,36 @@ class PttStream:
         self._mic.stop()
         logger.info("PttStream encerrado.")
 
+    def pause(self) -> None:
+        """Interrompe a captura durante o turno do tutor."""
+        self._muted = True
+        self._mic.pause()
+
+    def resume(self) -> None:
+        """Retoma a captura com buffers limpos."""
+        self._muted = False
+        self._mic.resume()
+
     async def _ptt_loop(self) -> None:
-        print("Modo PTT ativo. Pressione Enter para começar a gravar; Enter novamente para enviar.")
+        from core.hotkeys import pretty_key
+
+        tecla = pretty_key(self._cancel_key)
+        print(
+            "Modo PTT ativo. Pressione Enter para começar a gravar; "
+            f"Enter novamente para enviar; {tecla} descarta a gravação."
+        )
 
         while self._is_running:
-            await self._aguardar_enter("Pressione Enter para gravar...")
+            action = await self._wait_action("Pressione Enter para gravar...")
             if not self._is_running:
                 break
 
+            if self._muted:
+                print(f"[O tutor está respondendo — aguarde ou pressione {tecla} para cancelar.]")
+                continue
+
             self._mic.drain_queue()
-            print("[GRAVANDO... pressione Enter para encerrar]")
+            print(f"[GRAVANDO... pressione Enter para encerrar, {tecla} para descartar]")
             recording: list[bytes] = []
 
             stop_event = asyncio.Event()
@@ -100,10 +139,14 @@ class PttStream:
                 self._coletar_chunks(recording, stop_event), name="ptt-coletar"
             )
 
-            await self._aguardar_enter()
+            action = await self._wait_action()
             stop_event.set()
             await producer
 
+            # Tecla de cancelamento durante a gravação: descarta e volta a aguardar.
+            if action == "cancel":
+                print("[GRAVAÇÃO DESCARTADA]")
+                continue
             if not recording:
                 continue
 
@@ -121,10 +164,25 @@ class PttStream:
                 logger.error("Erro ao coletar chunk PTT: %s", exc)
                 break
 
-    async def _aguardar_enter(self, prompt: str = "") -> None:
+    async def _wait_action(self, prompt: str = "") -> str:
+        """Espera 'enter' ou a tecla de cancelamento. Outras teclas são ignoradas.
+
+        Sem HotkeyListener (ex.: testes), usa readline e só retorna 'enter'.
+        """
         if prompt:
             print(prompt, end="", flush=True)
-        await asyncio.to_thread(sys.stdin.readline)
+
+        if self._hotkeys is None:
+            await asyncio.to_thread(sys.stdin.readline)
+            return "enter"
+
+        while True:
+            key = await self._hotkeys.get_key()
+            if key == "enter":
+                return "enter"
+            if key == self._cancel_key:
+                return "cancel"
+            # teclas soltas durante a gravação são ignoradas
 
     async def _transcribe_and_enqueue(self, audio_bytes: bytes) -> None:
         print("[PROCESSANDO ÁUDIO...]")
@@ -132,6 +190,10 @@ class PttStream:
             text = await self._asr.transcribe(audio_bytes, self._sample_rate)
         except Exception as exc:
             logger.error("Erro na transcrição Whisper: %s", exc)
+            return
+
+        if self._muted:
+            logger.info("Transcrição PTT descartada: captura pausada.")
             return
 
         if text and len(text) > 2:
