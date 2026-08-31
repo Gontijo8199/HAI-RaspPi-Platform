@@ -1,7 +1,10 @@
 import asyncio
+import logging
 from collections import deque
 
 import pyaudio
+
+logger = logging.getLogger(__name__)
 
 
 class MicrophoneStream:
@@ -60,9 +63,7 @@ class MicrophoneStream:
             stream_callback=self._callback,
         )
         self._stream.start_stream()
-        import logging
-
-        logging.getLogger(__name__).info(
+        logger.info(
             "Microfone aberto — %d Hz, chunk=%d amostras (%.0f ms)",
             self.sample_rate,
             self.chunk_samples,
@@ -75,6 +76,34 @@ class MicrophoneStream:
             self._stream.stop_stream()
             self._stream.close()
         self._audio.terminate()
+
+    def pause(self) -> None:
+        """Interrompe a captura no nível do PortAudio (callback para de rodar).
+
+        Nenhum chunk novo chega à fila e o pre-roll é descartado, então nada
+        do que for dito durante a pausa é capturado ou retido. Idempotente.
+        """
+        self._running = False
+        if self._stream is not None:
+            try:
+                self._stream.stop_stream()
+            except Exception as exc:
+                logger.warning("Erro ao pausar stream: %s", exc)
+        self.clear_preroll()
+        self.drain_queue()
+        logger.debug("Microfone pausado.")
+
+    def resume(self) -> None:
+        """Retoma a captura com buffers limpos (sem áudio residual da pausa)."""
+        self.clear_preroll()
+        self.drain_queue()
+        self._running = True
+        if self._stream is not None:
+            try:
+                self._stream.start_stream()
+            except Exception as exc:
+                logger.error("Erro ao retomar stream: %s", exc)
+        logger.debug("Microfone retomado.")
 
     async def read_chunk(self) -> bytes:
         return await self._queue.get()

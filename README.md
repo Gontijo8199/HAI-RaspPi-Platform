@@ -100,7 +100,24 @@ python core/main.py --no-tts
 
 # Forçar backend de TTS
 python core/main.py --tts-backend espeak
+
+# Manter o mic capturando enquanto o tutor responde (barge-in por voz)
+python core/main.py --allow-barge-in
 ```
+
+## Controles
+
+| Tecla | Ação |
+|---|---|
+| **Espaço** | Cancela o pedido em andamento: interrompe o stream do LLM, corta a fala do TTS na hora e devolve o mic |
+| **Enter** (PTT) | Começa/encerra a gravação; durante a resposta é ignorado (mic mutado) |
+| **Espaço** (PTT, gravando) | Descarta o áudio gravado sem enviar |
+| **Ctrl+C** | Encerra o programa (restaura o terminal) |
+
+> A tecla de cancelamento é configurável em `[ux] cancel_key` (`space`,
+> `esc`, `enter`, `tab`, `backspace`, `ctrl+c` ou uma letra). O padrão é
+> **Espaço** porque o display Tk usa **Esc** para sair da tela cheia.
+
 
 ## Docker
 
@@ -184,6 +201,10 @@ width = 1024
 height = 600
 font_size = 20
 flashcard_width = 340 
+
+[ux]
+mute_while_responding = true  # false = mic continua aberto durante a resposta (barge-in)
+cancel_key = "space"          # tecla de cancelamento (Esc é usado pelo display p/ tela cheia)
 ```
 
 ## Testes

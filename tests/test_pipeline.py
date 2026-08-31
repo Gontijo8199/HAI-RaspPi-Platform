@@ -123,3 +123,86 @@ async def test_display_fn_legado_continua_funcionando(mock_llm_client, mock_tts)
     await pipeline_legado.wait_pending()
 
     assert recebido == ["Resposta de teste."]
+
+
+# ---------- Controle: run_turn / cancel_active / busy ----------
+
+
+@pytest.mark.asyncio
+async def test_run_turn_aguarda_o_fim_do_turno(pipeline):
+    await pipeline.run_turn("explica frações")
+
+    assert not pipeline.busy
+
+
+@pytest.mark.asyncio
+async def test_run_turn_ignora_utterance_invalida(mock_llm_client, mock_tts):
+    from core.pipeline import HAIPipeline
+
+    pipeline = HAIPipeline(llm_client=mock_llm_client, tts=mock_tts)
+    await pipeline.run_turn("   !!!   ")
+
+    mock_llm_client.send_stream.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cancel_active_interrompe_o_turno_em_andamento(mock_llm_client, mock_tts):
+    from core.pipeline import HAIPipeline
+
+    stream_iniciado = asyncio.Event()
+
+    async def _slow_stream(text):
+        stream_iniciado.set()
+        for _ in range(200):
+            await asyncio.sleep(0.01)
+            yield "x"
+
+    mock_llm_client.send_stream = MagicMock(side_effect=_slow_stream)
+    pipeline = HAIPipeline(llm_client=mock_llm_client, tts=mock_tts)
+
+    turn = asyncio.create_task(pipeline.run_turn("pergunta longa"))
+    await asyncio.wait_for(stream_iniciado.wait(), timeout=1.0)
+    assert pipeline.busy
+
+    assert pipeline.cancel_active() is True
+    with pytest.raises(asyncio.CancelledError):
+        await turn
+
+    mock_llm_client.cancel_stream.assert_called()
+    mock_tts.stop_speaking.assert_called()
+    assert not pipeline.busy
+
+
+@pytest.mark.asyncio
+async def test_cancel_active_sem_turno_e_noop_e_retorna_false(pipeline):
+    assert pipeline.cancel_active() is False
+
+
+@pytest.mark.asyncio
+async def test_busy_reflete_tasks_ativas(pipeline):
+    liberar = asyncio.Event()
+
+    async def _bloqueante(text):
+        await liberar.wait()
+        yield "ok"
+
+    pipeline._llm.send_stream = MagicMock(side_effect=_bloqueante)
+
+    pipeline.process_utterance("oi")
+    await asyncio.sleep(0.01)
+    assert pipeline.busy is True
+
+    liberar.set()
+    await pipeline.wait_pending()
+    assert pipeline.busy is False
+
+
+@pytest.mark.asyncio
+async def test_reset_trigger_via_run_turn(mock_llm_client, mock_tts, mock_display):
+    from core.pipeline import HAIPipeline
+
+    pipeline = HAIPipeline(llm_client=mock_llm_client, tts=mock_tts, display=mock_display)
+    await pipeline.run_turn("resetar")
+
+    mock_llm_client.resetar_sessao.assert_called_once()
+    mock_display.clear.assert_called_once()
