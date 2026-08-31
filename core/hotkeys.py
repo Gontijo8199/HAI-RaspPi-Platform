@@ -186,13 +186,11 @@ class HotkeyListener:
         self._thread = threading.Thread(target=self._read_loop, daemon=True, name="hotkey-reader")
         self._thread.start()
         self.available = True
-<<<<<<< HEAD
-        logger.info("Hotkeys ativas: tecla de cancelamento interrompe fala/pedido, Ctrl+C sai.")
-=======
         logger.info(
             "Hotkeys ativas: tecla de cancelamento interrompe fala/pedido, Ctrl+C sai."
         )
->>>>>>> refs/remotes/origin/main
+
+        logger.info("Hotkeys ativas: tecla de cancelamento interrompe fala/pedido, Ctrl+C sai.")
 
     async def get_key(self) -> str:
         """Aguarda a próxima tecla pressionada."""

@@ -99,13 +99,10 @@ def _build_tts(settings: dict, tts_backend: str | None, no_tts: bool) -> TTSSpea
     return TTSSpeaker(
         backend=backend,
         piper_bin=tts_cfg.get("piper_bin", "/home/rafa/piper/piper/piper"),
-<<<<<<< HEAD
-        piper_model=tts_cfg.get("piper_model", "/home/rafa/piper/voices/pt_BR-faber-medium.onnx"),
-=======
         piper_model=tts_cfg.get(
             "piper_model", "/home/rafa/piper/voices/pt_BR-faber-medium.onnx"
         ),
->>>>>>> refs/remotes/origin/main
+        piper_model=tts_cfg.get("piper_model", "/home/rafa/piper/voices/pt_BR-faber-medium.onnx"),
         rate=tts_cfg.get("rate", 160),
         lang=tts_cfg.get("lang", "pt-br"),
     )
@@ -288,13 +285,10 @@ async def _listen_once(stt, hotkeys: HotkeyListener) -> tuple[str | None, str | 
     """Espera simultaneamente um utterance e uma tecla. Retorna o que chegar."""
     utterance_task = asyncio.create_task(stt.get_utterance(), name="await-utterance")
     key_task = (
-<<<<<<< HEAD
-        asyncio.create_task(hotkeys.get_key(), name="await-key") if hotkeys.available else None
-=======
         asyncio.create_task(hotkeys.get_key(), name="await-key")
         if hotkeys.available
         else None
->>>>>>> refs/remotes/origin/main
+        asyncio.create_task(hotkeys.get_key(), name="await-key") if hotkeys.available else None
     )
     waiters = {utterance_task} | ({key_task} if key_task else set())
 
@@ -331,13 +325,10 @@ async def _watch_turn(
     """
     while True:
         key_task = (
-<<<<<<< HEAD
-            asyncio.create_task(hotkeys.get_key(), name="turn-key") if hotkeys.available else None
-=======
             asyncio.create_task(hotkeys.get_key(), name="turn-key")
             if hotkeys.available
             else None
->>>>>>> refs/remotes/origin/main
+            asyncio.create_task(hotkeys.get_key(), name="turn-key") if hotkeys.available else None 
         )
         waiters = {turn} | ({key_task} if key_task else set())
 
