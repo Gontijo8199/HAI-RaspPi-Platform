@@ -98,9 +98,7 @@ class HAIPipeline:
             logger.debug("Utterance ignorada (sem conteúdo válido): %r", utterance)
             return
 
-        task = asyncio.create_task(
-            self._handle_utterance(utterance), name=f"turn-{id(utterance)}"
-        )
+        task = asyncio.create_task(self._handle_utterance(utterance), name=f"turn-{id(utterance)}")
         task = asyncio.create_task(self._handle_utterance(utterance), name=f"turn-{id(utterance)}")
 
         self._active_tasks.add(task)
