@@ -99,6 +99,7 @@ class HAIPipeline:
             return
 
         task = asyncio.create_task(self._handle_utterance(utterance), name=f"turn-{id(utterance)}")
+
         self._active_tasks.add(task)
         task.add_done_callback(self._active_tasks.discard)
         await task

@@ -208,6 +208,7 @@ def test_cancel_stream_sem_stream_ativa_e_noop(mock_genai):
 @pytest.mark.asyncio
 async def test_cancel_stream_sinaliza_a_thread(mock_genai):
     mock_chat = MagicMock()
+
     mock_chat.send_message_stream.return_value = iter([MagicMock(text="a"), MagicMock(text="b")])
     mock_genai.return_value.chats.create.return_value = mock_chat
 
