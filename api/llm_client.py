@@ -10,6 +10,14 @@ from google.genai import types
 logger = logging.getLogger(__name__)
 
 
+def _log_executor_error(task: Any) -> None:
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.debug("Thread de stream LLM encerrou com: %s", exc)
+
+
 class LLMClient:
     SYSTEM_PROMPT = """\
         Você é um tutor virtual de apoio escolar para alunos do Ensino Fundamental II (6º ao 9º ano).
@@ -70,6 +78,9 @@ class LLMClient:
         self.timeout = timeout
         self._client = genai.Client(api_key=api_key)
         self._chat = self._nova_sessao()
+        # Evento da stream em andamento — usado por cancel_stream() para
+        # interromper a thread de rede imediatamente (tecla Esc).
+        self._cancel_event: threading.Event | None = None
 
     async def send_stream(self, transcription: str) -> AsyncIterator[str]:
         mensagem = f'Transcrição do aluno:\n"""\n{transcription}\n"""'
@@ -77,6 +88,7 @@ class LLMClient:
         queue: asyncio.Queue[str | None] = asyncio.Queue()
         loop = asyncio.get_running_loop()
         cancelled = threading.Event()
+        self._cancel_event = cancelled
 
         def _run_stream() -> None:
             try:
@@ -92,18 +104,36 @@ class LLMClient:
                 if not cancelled.is_set():
                     loop.call_soon_threadsafe(queue.put_nowait, None)
 
-        asyncio.get_running_loop().run_in_executor(None, _run_stream)
+        executor_task = asyncio.get_running_loop().run_in_executor(None, _run_stream)
 
-        while True:
-            try:
-                token = await asyncio.wait_for(queue.get(), timeout=self.timeout)
-            except TimeoutError:
-                logger.warning("Timeout aguardando token do LLM.")
-                cancelled.set()
-                break
-            if token is None:
-                break
-            yield token
+        try:
+            while True:
+                try:
+                    token = await asyncio.wait_for(queue.get(), timeout=self.timeout)
+                except TimeoutError:
+                    logger.warning("Timeout aguardando token do LLM.")
+                    break
+                if token is None:
+                    break
+                yield token
+        finally:
+            # Cobre tanto o fim natural quanto o fechamento do gerador
+            # (task cancelada via Esc): sinaliza a thread de rede parar.
+            cancelled.set()
+            if self._cancel_event is cancelled:
+                self._cancel_event = None
+            # Não aguarda a thread terminar (pode demorar um RTT); apenas
+            # registra exceções inesperadas dela.
+            executor_task.add_done_callback(_log_executor_error)
+
+    def cancel_stream(self) -> None:
+        """Interrompe o stream em andamento na camada de rede.
+
+        Seguro chamar a qualquer momento; sem stream ativa é no-op.
+        """
+        if self._cancel_event is not None:
+            self._cancel_event.set()
+            logger.info("Stream LLM cancelado.")
 
     async def send(self, transcription: str) -> str:
         tokens: list[str] = []

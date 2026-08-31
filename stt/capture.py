@@ -94,6 +94,7 @@ class WhisperStream:
         self._utterance_queue: asyncio.Queue[str] = asyncio.Queue()
         self._is_running = False
         self._pipeline_task: asyncio.Task | None = None
+        self._muted = False
 
         # Task da transcrição parcial em andamento.
         # Cancelada quando a transcrição final está pronta — garante que apenas a transcrição final chega ao LLM.
@@ -117,6 +118,29 @@ class WhisperStream:
             self._pipeline_task.cancel()
         self._mic.stop()
         logger.info("WhisperStream encerrado.")
+
+    def pause(self) -> None:
+        """Corta a captura de áudio (nível PortAudio) durante um pedido.
+
+        Cancela transcrições parciais em andamento e descarta qualquer buffer:
+        nada do que for dito enquanto o tutor responde é capturado ou fica
+        retido para depois. Transcrições finais que terminarem após a pausa
+        são descartadas (guarda em _transcribe_final).
+        """
+        self._muted = True
+        if self._interim_task and not self._interim_task.done():
+            self._interim_task.cancel()
+            self._interim_task = None
+        self._vad.reset_state()
+        self._mic.pause()
+        logger.info("Captura pausada (pedido em andamento).")
+
+    def resume(self) -> None:
+        """Retoma a captura com buffers limpos."""
+        self._muted = False
+        self._vad.reset_state()
+        self._mic.resume()
+        logger.info("Captura retomada.")
 
     # Loop interno
 
@@ -213,6 +237,12 @@ class WhisperStream:
             text = await self._asr.transcribe(audio_bytes, self._sample_rate)
         except Exception as exc:
             logger.error("Erro na transcrição Whisper: %s", exc)
+            return
+
+        # Guarda: a captura foi pausada enquanto esta transcrição rodava
+        # (pedido cancelado ou novo turno iniciou) — o áudio ficou obsoleto.
+        if self._muted:
+            logger.info("Transcrição descartada: captura pausada durante o processamento.")
             return
 
         if text and len(text) > 2:

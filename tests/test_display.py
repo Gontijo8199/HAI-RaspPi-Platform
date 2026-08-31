@@ -111,6 +111,13 @@ class TestMarkdownDisplayHeadless:
         finally:
             display.shutdown()
 
+    def test_show_status_nao_lanca(self):
+        display = MarkdownDisplay(headless=True)
+        try:
+            display.show_status("Ouvindo...")
+        finally:
+            display.shutdown()
+
     def test_shutdown_e_idempotente_o_suficiente(self):
         display = MarkdownDisplay(headless=True)
         display.shutdown()
