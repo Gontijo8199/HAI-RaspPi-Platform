@@ -29,6 +29,20 @@ height = 600
 font_size = 20
 flashcard_width = 340 
 
+[camera]
+enabled = true
+# A webcam que também serve de microfone. Índice do V4L2 (0 = /dev/video0) ou caminho.
+# Em muitas webcams /dev/video1 é só metadados: ache o nó certo com
+#   python -m vision.camera --list
+device = 4
+width = 1280
+height = 720
+max_side = 1024       # lado maior (px) da foto enviada ao LLM (menos banda e menos tokens)
+jpeg_quality = 85
+warmup_frames = 8     # frames descartados p/ estabilizar exposição e balanço de branco
+photo_ttl_s = 120     # foto pendente expira se a pergunta não vier nesse tempo
+save_dir = ""         # vazio = não grava fotos em disco (privacidade); preencha só p/ depurar
+
 [ux]
 # Pausa o microfone enquanto o tutor processa e fala a resposta
 # (evita captar o próprio tutor ou falas ao acaso durante o turno).
@@ -39,3 +53,7 @@ mute_while_responding = true
 # descarta gravação no modo PTT. Evite "esc": o display Tk usa Esc para sair
 # da tela cheia. Opções: space | esc | enter | tab | backspace | ctrl+c | letra.
 cancel_key = "space"
+
+# Tecla que tira uma foto para a próxima pergunta (vazio = só gatilho de voz).
+# Não pode repetir a tecla de cancelamento, Enter nem Ctrl+C.
+photo_key = "f"

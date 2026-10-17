@@ -53,6 +53,10 @@ VOLUME ["/app/config"]
 # no `docker run` — não incluído no exemplo padrão deste README, que roda
 # só com [display] enabled=false (modo headless).
 
+# Câmera: o container precisa enxergar a webcam (`--device /dev/video0`, além de
+# /dev/snd). O OpenCV vem do requirements.txt (opencv-python-headless): valide com
+# `python -c "import cv2"` após o build e, se faltar alguma lib nativa, instale-a via apt.
+
 # Variáveis de ambiente para os caminhos do Piper dentro do container
 ENV PIPER_BIN=/opt/piper/piper/piper
 ENV PIPER_MODEL=/opt/piper/voices/pt_BR-faber-medium.onnx
