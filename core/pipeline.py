@@ -10,6 +10,13 @@ Fluxo por utterance:
 5. TTS sintetiza e reproduz em thread daemon, sem bloquear novas utterances.
 6. Próximo utterance pode iniciar enquanto o TTS ainda fala o anterior.
 
+Foto (opcional, requer `camera`):
+- A foto é tirada pela tecla de foto (hotkey) ou por gatilho de voz na própria
+  fala ('tira uma foto', 'olha isso...'). Fica PENDENTE e é anexada à próxima
+  pergunta; só é consumida quando a resposta chega (cancelar/erro preservam a
+  foto) e expira após `photo_ttl_s`.
+- Fala só com o gatilho ('tira uma foto'): captura, avisa por voz e espera a pergunta.
+
 Controle:
 - run_turn() é a variante awaitável de process_utterance(): o orquestrador
   aguarda o turno terminar (ou ser cancelado) antes de retomar o microfone.
@@ -20,10 +27,14 @@ Controle:
 import asyncio
 import logging
 import re
+import time
+import unicodedata
 
 from api.llm_client import LLMClient
 from core import ui
 from tts.speaker import TTSSpeaker
+from vision.camera import CameraCapture, CameraError
+from vision.image import CapturedImage
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +43,41 @@ _VALID_TEXT = re.compile(r"[a-zA-Z0-9á-úÁ-Ú]")
 
 SENTENCE_ENDS = {".", "?", "!", "\n"}
 _MIN_TTS_CHARS = 40
+
+# Gatilhos de voz da câmera (comparados em minúsculas, sem acento nem pontuação).
+_PHOTO_TRIGGER_RE = re.compile(
+    r"\b(?:(?:tira|tire|tirar|bate|bata|bater)\s+(?:uma\s+)?foto"
+    r"|(?:olha|olhe|veja)\s+(?:isso|isto|essa|esse|aqui)"
+    r"|(?:usa|use|usar)\s+a\s+camera)\b"
+)
+# Sobras da fala que não formam uma pergunta (ex.: "tira uma foto por favor").
+_PHOTO_FILLERS = frozenset(
+    {"por", "favor", "pra", "mim", "agora", "entao", "ai", "ta", "ok", "tutor", "disso", "obrigado"}
+)
+_PHOTO_READY_MSG = "Pronto, tirei a foto! O que você quer saber sobre ela?"
+_PHOTO_ERROR_MSG = "Não consegui usar a câmera agora."
+
+
+def _normalize(text: str) -> str:
+    decomposed = unicodedata.normalize("NFKD", text.lower())
+    plain = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", plain).split())
+
+
+def parse_photo_request(utterance: str) -> tuple[bool, bool]:
+    """Detecta pedido de foto por voz.
+
+    Retorna (pediu_foto, tem_pergunta). `tem_pergunta` é False quando a fala é
+    só o gatilho (ex.: "tira uma foto", "olha isso"): nesse caso o pipeline
+    captura e espera a pergunta em vez de chamar o LLM.
+    """
+    plain = _normalize(utterance)
+    match = _PHOTO_TRIGGER_RE.search(plain)
+    if match is None:
+        return False, True
+    rest = f"{plain[: match.start()]} {plain[match.end() :]}".split()
+    content = [w for w in rest if w not in _PHOTO_FILLERS]
+    return True, len(content) >= 2
 
 
 class HAIPipeline:
@@ -54,6 +100,11 @@ class HAIPipeline:
         Compatibilidade retroativa: função chamada com a resposta completa
         (texto) para atualizar um display simples. Deve ter assinatura
         (text: str) -> None. Pode ser usado junto com `display`.
+    camera : CameraCapture | None
+        Webcam para fotos. Se `None` (padrão), gatilhos de voz de foto são
+        tratados como fala comum e nenhuma imagem é enviada ao LLM.
+    photo_ttl_s : float
+        Quanto tempo (s) uma foto pendente espera pela pergunta antes de expirar.
     """
 
     def __init__(
@@ -62,12 +113,18 @@ class HAIPipeline:
         tts: TTSSpeaker,
         display=None,
         display_fn=None,
+        camera: CameraCapture | None = None,
+        photo_ttl_s: float = 120.0,
     ):
         self._llm = llm_client
         self._tts = tts
         self._display = display
         self._display_fn = display_fn
+        self._camera = camera
+        self._photo_ttl_s = photo_ttl_s
+        self._pending_photo: CapturedImage | None = None
         self._active_tasks: set[asyncio.Task] = set()
+        self._photo_tasks: set[asyncio.Task] = set()
 
     # Controle de turnos
 
@@ -118,6 +175,83 @@ class HAIPipeline:
         self._tts.stop_speaking()
         return had_work
 
+    # Foto
+
+    @property
+    def camera_enabled(self) -> bool:
+        return self._camera is not None
+
+    @property
+    def has_pending_photo(self) -> bool:
+        return self._peek_photo() is not None
+
+    def request_photo(self) -> None:
+        """Dispara a captura sem aguardar (usada pela hotkey de foto)."""
+        if self._camera is None:
+            return
+        if self.busy:
+            ui.dim("Aguarde o tutor terminar de responder para tirar a foto.")
+            return
+        task = asyncio.create_task(self._photo_from_hotkey(), name="photo-hotkey")
+        self._photo_tasks.add(task)
+        task.add_done_callback(self._photo_tasks.discard)
+
+    async def capture_photo(self) -> bool:
+        """Tira uma foto e a deixa pendente para a próxima pergunta.
+
+        Retorna False (já reportando o erro ao usuário) se não há câmera ou a
+        captura falhou. Uma foto nova substitui a pendente anterior.
+        """
+        if self._camera is None:
+            return False
+
+        ui.photo_capturing()
+        self._show_status("Capturando foto...")
+        try:
+            image = await self._camera.capture()
+        except CameraError as exc:
+            logger.warning("Falha ao capturar foto: %s", exc)
+            ui.photo_failed(str(exc))
+            self._show_status("Câmera indisponível")
+            return False
+
+        self._pending_photo = image
+        ui.photo_ready(image.width, image.height, image.size_kb)
+        self._show_status("Foto capturada — pode perguntar")
+        return True
+
+    def discard_photo(self) -> bool:
+        """Descarta a foto pendente. Retorna True se havia uma."""
+        had_photo = self._pending_photo is not None
+        self._pending_photo = None
+        if had_photo:
+            ui.photo_discarded()
+            self._show_status("Foto descartada")
+        return had_photo
+
+    def _peek_photo(self) -> CapturedImage | None:
+        """Foto pendente ainda válida (expira após photo_ttl_s), sem consumi-la."""
+        photo = self._pending_photo
+        if photo is None:
+            return None
+        if time.monotonic() - photo.captured_at > self._photo_ttl_s:
+            logger.info("Foto pendente expirou (%.0fs).", self._photo_ttl_s)
+            self._pending_photo = None
+            return None
+        return photo
+
+    async def _photo_from_hotkey(self) -> None:
+        await self.capture_photo()
+        ui.listening()
+
+    def _show_status(self, text: str) -> None:
+        if self._display is None:
+            return
+        try:
+            self._display.show_status(text)
+        except Exception:
+            pass
+
     # Interno
 
     async def _handle_utterance(self, utterance: str) -> None:
@@ -134,28 +268,48 @@ class HAIPipeline:
             ui.success("\n[SESSÃO REINICIADA] Histórico apagado.")
             return
 
-        ui.thinking(utterance)
-        if self._display is not None:
-            try:
-                self._display.show_status("Pensando...")
-            except Exception:
-                pass
+        # Foto: gatilho de voz na fala e/ou foto já pendente (tecla de foto).
+        if self._camera is not None:
+            asked, has_question = parse_photo_request(utterance)
+            if asked:
+                if not await self.capture_photo():
+                    self._tts.speak(_PHOTO_ERROR_MSG)
+                    return
+                if not has_question:
+                    self._tts.speak(_PHOTO_READY_MSG)
+                    return
+        photo = self._peek_photo()
+        images = [photo] if photo is not None else []
+
+        ui.thinking(utterance, photo=bool(images))
+        self._show_status("Pensando...")
 
         # Resposta principal (streaming) e flash-card do tópico (não-stream) rodam concorrentemente: o flash-card não atrasa a fala nem o texto.
         if self._display is not None and hasattr(self._llm, "generate_flashcard"):
-            await asyncio.gather(
-                self._stream_response(utterance),
-                self._generate_flashcard(utterance),
+            answered, _ = await asyncio.gather(
+                self._stream_response(utterance, images),
+                self._generate_flashcard(utterance, images),
             )
         else:
-            await self._stream_response(utterance)
+            answered = await self._stream_response(utterance, images)
 
-    async def _stream_response(self, utterance: str) -> None:
+        # A foto só é consumida quando a resposta chegou: cancelar (levanta
+        # CancelledError acima) ou falha de API mantêm a foto para a próxima tentativa.
+        if answered and photo is not None and self._pending_photo is photo:
+            self._pending_photo = None
+
+    @staticmethod
+    def _image_kwargs(images: list[CapturedImage]) -> dict:
+        # Só passa `images` quando há foto: clientes/mocks sem suporte a imagem seguem válidos.
+        return {"images": images} if images else {}
+
+    async def _stream_response(self, utterance: str, images: list[CapturedImage]) -> bool:
+        """Consome o stream do LLM. Retorna True se uma resposta completa foi obtida."""
         response_parts: list[str] = []
         tts_buffer = ""
 
         try:
-            async for token in self._llm.send_stream(utterance):
+            async for token in self._llm.send_stream(utterance, **self._image_kwargs(images)):
                 response_parts.append(token)
                 print(token, end="", flush=True)
 
@@ -191,13 +345,13 @@ class HAIPipeline:
         except Exception as exc:
             logger.error("Erro no pipeline LLM→TTS: %s", exc)
             ui.error(f"\n[ERRO NA API] {exc}")
-            return
+            return False
 
         full_response = "".join(response_parts).strip()
         print()
 
         if not full_response:
-            return
+            return False
 
         if self._display is not None:
             try:
@@ -211,9 +365,13 @@ class HAIPipeline:
             except Exception as exc:
                 logger.warning("Erro no display_fn: %s", exc)
 
-    async def _generate_flashcard(self, utterance: str) -> None:
+        return True
+
+    async def _generate_flashcard(self, utterance: str, images: list[CapturedImage]) -> None:
         try:
-            flashcard_md = await self._llm.generate_flashcard(utterance)
+            flashcard_md = await self._llm.generate_flashcard(
+                utterance, **self._image_kwargs(images)
+            )
         except asyncio.CancelledError:
             raise
         except Exception as exc:

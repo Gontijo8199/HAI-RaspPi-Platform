@@ -102,3 +102,45 @@ class TestFilaDeTeclas:
             hotkeys._queue.put_nowait(key)
         hotkeys.clear()
         assert hotkeys._queue.empty()
+
+
+class TestCallbacksDeTecla:
+    async def test_tecla_registrada_vai_para_o_callback_e_nao_para_a_fila(self):
+        hotkeys = HotkeyListener()
+        hotkeys._loop = asyncio.get_running_loop()
+        chamadas = []
+        hotkeys.register("f", lambda: chamadas.append("f"))
+
+        hotkeys._dispatch("f")
+        await asyncio.sleep(0)
+
+        assert chamadas == ["f"]
+        assert hotkeys._queue.empty()
+
+    async def test_tecla_sem_callback_continua_indo_para_a_fila(self):
+        hotkeys = HotkeyListener()
+        hotkeys._loop = asyncio.get_running_loop()
+        hotkeys.register("f", lambda: None)
+
+        hotkeys._dispatch("space")
+        await asyncio.sleep(0)
+
+        assert hotkeys._queue.get_nowait() == "space"
+
+    async def test_registrar_de_novo_substitui_o_callback(self):
+        hotkeys = HotkeyListener()
+        hotkeys._loop = asyncio.get_running_loop()
+        chamadas = []
+        hotkeys.register("f", lambda: chamadas.append("antigo"))
+        hotkeys.register("f", lambda: chamadas.append("novo"))
+
+        hotkeys._dispatch("f")
+        await asyncio.sleep(0)
+
+        assert chamadas == ["novo"]
+
+    def test_dispatch_sem_loop_e_noop(self):
+        hotkeys = HotkeyListener()
+        hotkeys.register("f", lambda: pytest.fail("não deveria rodar"))
+
+        hotkeys._dispatch("f")  # sem start(): não lança

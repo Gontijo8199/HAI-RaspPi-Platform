@@ -224,3 +224,77 @@ async def test_cancel_stream_sinaliza_a_thread(mock_genai):
             break
 
     assert tokens == ["a"]
+
+
+# ---------- Imagens (foto da webcam) ----------
+
+
+def _imagem():
+    from vision.image import CapturedImage
+
+    return CapturedImage(data=b"\xff\xd8fake", width=10, height=10)
+
+
+@patch("google.genai.Client")
+@pytest.mark.asyncio
+async def test_send_stream_com_imagem_envia_foto_antes_do_texto(mock_genai):
+    mock_chat = MagicMock()
+    mock_chat.send_message_stream.return_value = iter([MagicMock(text="É uma samambaia.")])
+    mock_genai.return_value.chats.create.return_value = mock_chat
+
+    from api.llm_client import LLMClient
+
+    client = LLMClient(api_key="fake-key", model="gemma-fake")
+    resposta = await client.send("que planta é essa?", images=[_imagem()])
+
+    assert resposta == "É uma samambaia."
+    (conteudo,) = mock_chat.send_message_stream.call_args.args
+    assert isinstance(conteudo, list)
+    assert conteudo[0].inline_data.data == b"\xff\xd8fake"
+    assert conteudo[0].inline_data.mime_type == "image/jpeg"
+    assert "que planta é essa?" in conteudo[-1]
+    assert "foto" in conteudo[-1]
+
+
+@patch("google.genai.Client")
+@pytest.mark.asyncio
+async def test_send_stream_sem_imagem_continua_enviando_texto_puro(mock_genai):
+    mock_chat = MagicMock()
+    mock_chat.send_message_stream.return_value = iter([MagicMock(text="ok")])
+    mock_genai.return_value.chats.create.return_value = mock_chat
+
+    from api.llm_client import LLMClient
+
+    client = LLMClient(api_key="fake-key", model="gemma-fake")
+    await client.send("oi")
+
+    (conteudo,) = mock_chat.send_message_stream.call_args.args
+    assert isinstance(conteudo, str)
+    assert "foto" not in conteudo
+
+
+@patch("google.genai.Client")
+@pytest.mark.asyncio
+async def test_generate_flashcard_com_imagem(mock_genai):
+    mock_response = MagicMock()
+    mock_response.text = "## Plantas"
+    mock_genai.return_value.models.generate_content.return_value = mock_response
+    mock_genai.return_value.chats.create.return_value = MagicMock()
+
+    from api.llm_client import LLMClient
+
+    client = LLMClient(api_key="fake-key", model="gemma-fake")
+    flashcard = await client.generate_flashcard("que planta é essa?", images=[_imagem()])
+
+    assert flashcard == "## Plantas"
+    contents = mock_genai.return_value.models.generate_content.call_args.kwargs["contents"]
+    assert isinstance(contents, list)
+    assert contents[0].inline_data.data == b"\xff\xd8fake"
+
+
+@patch("google.genai.Client")
+def test_system_prompt_orienta_o_uso_de_imagens(mock_genai):
+    from api.llm_client import LLMClient
+
+    assert "Imagens:" in LLMClient.SYSTEM_PROMPT
+    assert "pessoas" in LLMClient.SYSTEM_PROMPT

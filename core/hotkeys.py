@@ -27,6 +27,7 @@ import sys
 import termios
 import threading
 import tty
+from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +142,7 @@ class HotkeyListener:
         await hotkeys.start()            # no-op se stdin não for TTY
         key = await hotkeys.get_key()    # 'esc', 'enter', 'ctrl+c', 'a', ...
         hotkeys.clear()                  # descarta teclas bufferizadas
+        hotkeys.register("f", callback)  # tecla com ação própria (não vai para a fila)
         hotkeys.stop()                   # restaura o terminal
 
     Atributos
@@ -157,6 +159,7 @@ class HotkeyListener:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
+        self._callbacks: dict[str, Callable[[], None]] = {}
         self._saved_attrs: list | termios.tcattrdata | None = None
         self._restore_registered = False
 
@@ -194,6 +197,16 @@ class HotkeyListener:
         """Aguarda a próxima tecla pressionada."""
         return await self._queue.get()
 
+    def register(self, key: str, callback: Callable[[], None]) -> None:
+        """Associa uma tecla a um callback síncrono, executado no event loop.
+
+        A tecla registrada NÃO entra na fila de get_key(): assim ela funciona
+        em qualquer modo (inclusive PTT, onde o PttStream consome a fila e
+        ignoraria teclas desconhecidas) sem disputar leitores. Registrar de
+        novo a mesma tecla substitui o callback.
+        """
+        self._callbacks[key] = callback
+
     def clear(self) -> None:
         """Descarta teclas bufferizadas (evita ações fantasma entre turnos)."""
         while not self._queue.empty():
@@ -229,12 +242,22 @@ class HotkeyListener:
                     if extra:
                         data += extra
                 key = normalize_key(data)
-                if key is not None and self._loop is not None:
-                    self._loop.call_soon_threadsafe(self._queue.put_nowait, key)
+                if key is not None:
+                    self._dispatch(key)
             except OSError:
                 break  # fd fechado durante shutdown
             except Exception as exc:
                 logger.debug("Erro no leitor de teclas: %s", exc)
+
+    def _dispatch(self, key: str) -> None:
+        """Entrega a tecla ao callback registrado ou, se não houver, à fila."""
+        if self._loop is None:
+            return
+        callback = self._callbacks.get(key)
+        if callback is not None:
+            self._loop.call_soon_threadsafe(callback)
+        else:
+            self._loop.call_soon_threadsafe(self._queue.put_nowait, key)
 
     @staticmethod
     def _drain_escape(fd: int) -> bytes:

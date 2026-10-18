@@ -60,8 +60,26 @@ def transcribing() -> None:
     print(f"\r{_paint(_YELLOW, '● Transcrevendo...')}\033[K", end="", flush=True)
 
 
-def thinking(utterance: str) -> None:
-    print(f"\r{_paint(_MAGENTA, f'● Pensando: “{utterance}”')}\033[K")
+def thinking(utterance: str, photo: bool = False) -> None:
+    label = "Pensando (com foto)" if photo else "Pensando"
+    print(f"\r{_paint(_MAGENTA, f'● {label}: “{utterance}”')}\033[K")
+
+
+def photo_capturing() -> None:
+    print(f"\r{_paint(_YELLOW, '● Capturando foto...')}\033[K", end="", flush=True)
+
+
+def photo_ready(width: int, height: int, size_kb: float) -> None:
+    msg = f"✓ Foto capturada ({width}x{height}, {size_kb:.0f} KB) — faça sua pergunta."
+    print(f"\r{_paint(_GREEN, msg)}\033[K")
+
+
+def photo_failed(reason: str) -> None:
+    print(f"\r{_paint(_RED, f'✗ Câmera: {reason}')}\033[K")
+
+
+def photo_discarded() -> None:
+    print(f"\r{_paint(_DIM, '○ Foto descartada.')}\033[K")
 
 
 def speaking() -> None:

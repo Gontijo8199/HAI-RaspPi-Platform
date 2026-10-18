@@ -2,6 +2,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from vision.image import CapturedImage
+
 
 @pytest.fixture
 def settings():
@@ -34,7 +36,7 @@ def mock_llm_client():
     client = MagicMock()
     client.send = AsyncMock(return_value="Resposta de teste.")
 
-    async def _fake_stream(text):
+    async def _fake_stream(text, images=None):
         for token in ["Resposta ", "de ", "teste."]:
             yield token
 
@@ -63,3 +65,16 @@ def mock_display():
     display.shutdown = MagicMock()
     display.available = False
     return display
+
+
+@pytest.fixture
+def fake_image():
+    return CapturedImage(data=b"\xff\xd8\xff\xe0fake-jpeg", width=640, height=480)
+
+
+@pytest.fixture
+def mock_camera(fake_image):
+    camera = MagicMock()
+    camera.capture = AsyncMock(return_value=fake_image)
+    camera.device = 0
+    return camera
