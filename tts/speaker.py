@@ -169,7 +169,7 @@ class TTSSpeaker:
                     self._piper_bin,
                 )
             except subprocess.TimeoutExpired:
-                logger.warning("Piper timeout para: %r", item[:50])
+                logger.warning("Piper timeout (frase com %d caracteres).", len(item))
                 with self._proc_lock:
                     if self._current_proc:
                         self._current_proc.terminate()
@@ -209,7 +209,7 @@ class TTSSpeaker:
             except FileNotFoundError:
                 logger.error("espeak-ng não encontrado: sudo apt install espeak-ng")
             except subprocess.TimeoutExpired:
-                logger.warning("espeak-ng timeout para: %r", item[:50])
+                logger.warning("espeak-ng timeout (frase com %d caracteres).", len(item))
                 proc.terminate()
             except Exception as exc:
                 logger.warning("Erro TTS espeak: %s", exc)

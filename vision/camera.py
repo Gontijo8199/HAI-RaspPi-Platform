@@ -81,6 +81,32 @@ def _encode_jpeg(frame: Any, max_side: int, quality: int) -> tuple[bytes, int, i
     return buffer.tobytes(), width, height
 
 
+def thumbnail_png(image: CapturedImage, max_side: int) -> bytes | None:
+    """Miniatura PNG da foto, para exibir na interface Tk (que não lê JPEG).
+
+    Retorna None se o OpenCV não estiver disponível ou a imagem não decodificar —
+    a interface mostra só o rótulo da foto nesse caso.
+    """
+    try:
+        cv2 = _import_cv2()
+        import numpy as np
+
+        frame = cv2.imdecode(np.frombuffer(image.data, dtype=np.uint8), cv2.IMREAD_COLOR)
+        if frame is None:
+            return None
+        height, width = frame.shape[:2]
+        scale = min(max_side / max(height, width), 1.0)
+        if scale < 1.0:
+            frame = cv2.resize(
+                frame, (round(width * scale), round(height * scale)), interpolation=cv2.INTER_AREA
+            )
+        ok, buffer = cv2.imencode(".png", frame)
+        return buffer.tobytes() if ok else None
+    except Exception as exc:
+        logger.debug("Miniatura indisponível: %s", exc)
+        return None
+
+
 class CameraCapture:
     """Tira fotos com a webcam, de forma não-bloqueante.
 

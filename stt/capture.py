@@ -246,7 +246,7 @@ class WhisperStream:
             return
 
         if text and len(text) > 2:
-            logger.info("Transcrição: %s", text)
+            logger.info("Transcrição pronta (%d caracteres).", len(text))
             await self._utterance_queue.put(text)
         else:
             logger.debug("Transcrição vazia ou muito curta, descartando.")

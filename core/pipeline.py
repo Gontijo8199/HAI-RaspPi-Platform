@@ -32,6 +32,7 @@ import unicodedata
 
 from api.llm_client import LLMClient
 from core import ui
+from tts.chunker import SentenceChunker
 from tts.speaker import TTSSpeaker
 from vision.camera import CameraCapture, CameraError
 from vision.image import CapturedImage
@@ -40,9 +41,6 @@ logger = logging.getLogger(__name__)
 
 RESET_TRIGGERS = {"resetar", "reset", "nova sessão", "novo assunto", "recomeçar"}
 _VALID_TEXT = re.compile(r"[a-zA-Z0-9á-úÁ-Ú]")
-
-SENTENCE_ENDS = {".", "?", "!", "\n"}
-_MIN_TTS_CHARS = 40
 
 # Gatilhos de voz da câmera (comparados em minúsculas, sem acento nem pontuação).
 _PHOTO_TRIGGER_RE = re.compile(
@@ -306,37 +304,21 @@ class HAIPipeline:
     async def _stream_response(self, utterance: str, images: list[CapturedImage]) -> bool:
         """Consome o stream do LLM. Retorna True se uma resposta completa foi obtida."""
         response_parts: list[str] = []
-        tts_buffer = ""
+        chunker = SentenceChunker()
 
         try:
             async for token in self._llm.send_stream(utterance, **self._image_kwargs(images)):
                 response_parts.append(token)
                 print(token, end="", flush=True)
 
-                tts_buffer += token
-                flush_idx = next((i for i, ch in enumerate(tts_buffer) if ch in SENTENCE_ENDS), -1)
-
-                if flush_idx >= 0:
-                    phrase = tts_buffer[: flush_idx + 1].strip()
-                    tts_buffer = tts_buffer[flush_idx + 1 :]
-                    if phrase:
-                        self._tts.speak(phrase)
-                        ui.speaking()
-                elif len(tts_buffer) >= _MIN_TTS_CHARS:
-                    comma_idx = tts_buffer.rfind(",")
-                    if comma_idx > _MIN_TTS_CHARS // 2:
-                        phrase = tts_buffer[: comma_idx + 1].strip()
-                        tts_buffer = tts_buffer[comma_idx + 1 :]
-                    else:
-                        phrase = tts_buffer.strip()
-                        tts_buffer = ""
-                    if phrase:
-                        self._tts.speak(phrase)
-                        ui.speaking()
+                for phrase in chunker.feed(token):
+                    self._tts.speak(phrase)
+                    ui.speaking()
 
             # Flush do buffer restante
-            if tts_buffer.strip():
-                self._tts.speak(tts_buffer.strip())
+            rest = chunker.flush()
+            if rest:
+                self._tts.speak(rest)
 
         except asyncio.CancelledError:
             ui.cancelled_inline()

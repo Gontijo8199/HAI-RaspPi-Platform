@@ -1,46 +1,180 @@
 # HAI — Human-AI Interaction Platform
 
-Tutor virtual de apoio escolar embarcado: capta a voz do aluno, transcreve localmente com Whisper e consulta um LLM remoto, respondendo em voz natural via Piper TTS. Projetado para rodar em Raspberry Pi 5 sem depender de conexão contínua para o STT.
+Plataforma educacional de inteligência artificial embarcada, pensada para um
+Raspberry Pi 5 com tela de toque de **1024 × 600**. Ao iniciar, ela abre um
+**menu de atividades**. Nesta versão há uma única atividade:
 
-## Pipeline
+- **Conversar com a IA** — o aluno monta uma pergunta falando (Whisper local),
+  escrevendo e tirando fotos com a webcam, e um LLM remoto responde em texto
+  (Markdown) e em voz (Piper TTS).
+
+As outras atividades previstas na POC (classificadores, árvores de decisão,
+aprendizado por reforço, geração de imagem, agentes...) **ainda não foram
+implementadas** e não aparecem no menu. A estrutura de módulos existe para
+recebê-las depois (veja [Adicionar um módulo](#adicionar-um-módulo)).
+
+O tutor por voz original, sem interface gráfica, continua disponível como
+**modo terminal** (`--terminal`), útil em SSH, Docker e depuração.
+
+## Visão geral
 
 <pre>
-voz -> VAD (Silero) -> STT (Whisper) -> LLM API (streaming) -> TTS (Piper) -> speaker
-                                   ▲          └>  Display (Tkinter) -> Tela
-webcam -> foto (OpenCV, opcional) -──┘
+                         ┌──────────── core/app.py ────────────┐
+python core/main.py ───► │ janela Tk · menu · navegação · fim   │
+                         └───────┬──────────────────────────────┘
+                                 │ enter()/exit()
+                       modules/chat (Conversar com a IA)
+                       ├─ view.py     tela (layout da POC)
+                       └─ session.py  lógica da conversa (sem Tk)
+                                 │ usa
+              core/services.py — serviços compartilhados, criados 1 vez
+   ┌──────────────┬──────────────┬───────────────┬──────────────────┐
+   api/ LLM       tts/ Piper     stt/ Whisper     vision/ webcam
+   (streaming)    (fila+thread)  + microfone      (OpenCV, sob demanda)
 </pre>
 
-Cada etapa é assíncrona e não-bloqueante:
-- O microfone continua ouvindo enquanto o Whisper transcreve.
-- O TTS começa a falar antes da resposta do LLM terminar (streaming).
-- Transcrição parcial é enviada ao LLM enquanto o aluno ainda fala (streaming STT).
-- A foto da webcam (mesma que capta o áudio) segue junto com a pergunta ao LLM.
+Pipeline de uma pergunta no módulo de conversa:
 
-## Hardware
-
-- Raspberry Pi 5
-- Raspberry Pi OS Lite (64-bit)
-- Saída de áudio: HDMI ou jack 3.5mm
-- Webcam USB (microfone + câmera; fotos via OpenCV/V4L2)
+<pre>
+segurar 🎤 → PortAudio → soltar → Whisper (local) ─┐
+digitar ───────────────────────────────────────────┼─► rascunho ordenado ─► Enviar
+Foto → webcam (OpenCV) → JPEG ─────────────────────┘    [texto, foto, texto…]
+   ─► LLM (1 requisição multimodal, streaming) ─► balão da IA (Markdown)
+                                               └─► TTS frase a frase ─► alto-falante
+</pre>
 
 ## Estrutura
 
 ```
-├── stt/        captura de áudio, VAD e transcrição Whisper
-├── api/        cliente LLM com streaming assíncrono
-├── tts/        síntese de voz não-bloqueante (Piper, espeak, pyttsx3)
-├── vision/     captura de foto pela webcam (OpenCV) e tipo da imagem
-├── display/    driver do display físico
-├── core/       orquestração do pipeline (main + pipeline)
-└── config/     configurações e segredos
+├── core/
+│   ├── main.py        ponto de entrada (argumentos; interface gráfica ou --terminal)
+│   ├── app.py         aplicação gráfica: janela, menu, navegação, ciclo de vida, encerramento
+│   ├── services.py    configuração/credenciais e serviços compartilhados (LLM, TTS, câmera, Whisper)
+│   ├── terminal.py    modo terminal legado (VAD ou PTT por teclado)
+│   ├── pipeline.py    orquestração do modo terminal (fala → LLM → TTS → display)
+│   ├── hotkeys.py     teclas do modo terminal
+│   └── ui.py          saída colorida do modo terminal
+├── modules/
+│   ├── base.py        contrato de um módulo (enter / exit / close)
+│   ├── __init__.py    lista de módulos do menu (build_modules)
+│   └── chat/          "Conversar com a IA": module.py (ligação), session.py (lógica), view.py (tela)
+├── gui/               tema (paleta da POC), widgets de toque, menu principal
+├── api/               cliente LLM (google-genai) com streaming, cancelamento e erros legíveis
+├── stt/               microfone (PyAudio), gravador segurar-para-falar, Whisper, VAD (só terminal)
+├── tts/               síntese de voz não-bloqueante (Piper, espeak, pyttsx3) e quebra em frases
+├── vision/            captura de foto pela webcam (OpenCV) e tipo da imagem
+├── display/           Markdown → Tk (compartilhado) e janela de saída do modo terminal
+├── config/            settings.toml (parâmetros) e secrets.toml (chave, nunca versionar)
+├── tests/             pytest (dublês de serviços em tests/fakes.py)
+└── POC/               prova de conceito HTML (interface.zip) — referência visual, não é usada em execução
 ```
+
+### Responsabilidades e decisões
+
+| Componente | Responsabilidade |
+|---|---|
+| `core/app.py` (`App`) | Cria a janela, mostra o menu, abre/fecha módulos com um lock (toques duplos não abrem duas vezes), trata fechar janela/Ctrl+C/SIGTERM e encerra tudo na ordem. |
+| `core/services.py` (`Services`) | Lê a configuração sem derrubar o app (problemas viram avisos no menu) e cria **uma vez** o cliente LLM, o TTS e a câmera. O Whisper é carregado sob demanda, em thread, uma única vez por execução. |
+| `modules/base.py` (`Module`) | Contrato mínimo: `enter(frame, voltar)`, `exit()`, `close()`, `unavailable_reason()`, `draw_icon()`. |
+| `modules/chat/session.py` (`ChatSession`) | Rascunho ordenado (texto/foto), uma atividade por vez, envio único multimodal, streaming para tela e TTS, cancelamento, nova conversa, descarte de resultados atrasados. Não importa Tk. |
+| `modules/chat/view.py` (`ChatView`) | Widgets da tela; só reflete o estado da sessão e chama seus métodos. |
+
+- **Tecnologia de tela: Tkinter.** A POC é HTML/JS no navegador, mas o projeto
+  já usava Tk para a tela e o backend (microfone, Whisper, câmera, TTS) é
+  Python. Reproduzir o layout da POC em Tk evita um servidor web local, um
+  navegador em modo quiosque e chaves de API no front-end, sem dependências
+  novas.
+- **Um único event loop.** O Tk é bombeado dentro do loop asyncio
+  (`root.update()` ~50×/s). Callbacks de botão e tarefas assíncronas rodam na
+  mesma thread: não há filas entre threads na interface, e trabalho pesado
+  (rede, Whisper, câmera, áudio) continua nas threads de cada serviço.
+- **Sem emoji na interface Tk**: o Tk 8.6 no X11 não desenha fontes de emoji
+  coloridas. Os ícones são desenhados em `Canvas` ou usam símbolos Unicode básicos.
+
+## Fluxo de inicialização e navegação
+
+1. `python core/main.py` lê `config/settings.toml` e `config/secrets.toml`.
+   Arquivo ausente/inválido ou chave vazia **não fecham o app**: o menu mostra o
+   problema e o cartão afetado explica por que não abre.
+2. `Services` cria LLM, TTS e câmera (nada de microfone nem Whisper ainda).
+3. A janela abre em tela cheia (ou `--windowed`) com o menu.
+4. Tocar em **Conversar com a IA** cria a tela do módulo, abre o microfone
+   **pausado** e começa a carregar o Whisper em segundo plano.
+5. **← Voltar**: o módulo cancela gravação/transcrição/resposta/fala, fecha o
+   microfone, recria a sessão do LLM e apaga mensagens, rascunho e fotos; a
+   tela é destruída e o menu volta. LLM, TTS e Whisper continuam carregados.
+6. Fechar a janela, Ctrl+C ou SIGTERM: sai do módulo ativo, encerra os
+   módulos e os serviços (TTS, stream do LLM) e destrói a janela.
+
+Esc sai da tela cheia (útil para manutenção).
+
+## Módulo "Conversar com a IA"
+
+Layout de `conversar-llm.html` (POC):
+
+```
+[← Voltar]  Conversar com a IA                [Voz: ligada] [Nova conversa]
+┌ conversa: aluno à direita, IA à esquerda (Markdown) ──────────────────────┐
+● estado atual ou aviso
+┌ pergunta em montagem: blocos de texto/foto, ＋ entre blocos, ✕ remove ────┐
+[● Segurar para falar] [Foto] [Escrever]                 [■ Parar] [Enviar ➤]
+```
+
+- **Segurar para falar**: grava enquanto o botão estiver pressionado; ao soltar,
+  o Whisper local transcreve e o texto vira um bloco editável. Gravações muito
+  curtas (< 0,3 s) são descartadas com aviso.
+- **Foto**: tira uma foto com a webcam configurada e adiciona um bloco com
+  miniatura (`foto 1`, `foto 2`...).
+- **Escrever** / **＋**: cria um bloco de texto no fim ou entre dois blocos.
+  Enter envia; Shift+Enter quebra a linha.
+- **Enviar**: manda todos os blocos **na ordem**, numa única requisição
+  multimodal, para a sessão de chat atual (o LLM lembra a conversa).
+- **Parar**: interrompe a transcrição, a foto, a resposta (corta o stream na
+  rede) ou a fala. Uma resposta interrompida ou com erro devolve a pergunta ao
+  rascunho para tentar de novo.
+- **Voz: ligada/desligada**: liga ou desliga a leitura da resposta (TTS).
+- **Nova conversa**: apaga o histórico (inclusive o do LLM), as mensagens e o rascunho.
+
+Estados mostrados na linha de status: pronto · gravando · transcrevendo ·
+tirando a foto · pergunta enviada/aguardando a IA · a IA está respondendo ·
+lendo em voz alta · avisos (azul) e erros (vermelho), como falta de conexão,
+chave recusada, limite de uso, microfone ou câmera indisponíveis.
+
+Só uma atividade acontece por vez: não dá para enviar duas vezes, gravar
+durante uma transcrição ou fotografar durante uma resposta. Começar a gravar
+enquanto a IA fala interrompe a fala.
+
+### Privacidade
+
+- Nada da conversa é gravado em disco: histórico, rascunho e fotos ficam só na memória.
+- Sair do módulo ou tocar em **Nova conversa** recria a sessão do LLM e apaga tudo.
+- O microfone só captura enquanto o botão está pressionado (fica pausado no PortAudio no resto do tempo).
+- Logs técnicos não contêm perguntas, transcrições, respostas nem imagens
+  (só tamanhos, tipos de erro e estados).
+- Não há telemetria. O único envio externo é a requisição ao LLM configurado.
+- Exceção opcional: `[camera] save_dir` grava as fotos em disco para depuração (vazio por padrão).
+
+## Hardware
+
+- Raspberry Pi 5 com Raspberry Pi OS (64-bit) e sessão gráfica (X11 ou Wayland com XWayland)
+- Tela de toque 1024 × 600 (outras resoluções funcionam; a área da conversa se ajusta)
+- Webcam USB (câmera + microfone) — fotos via OpenCV/V4L2, áudio via PortAudio
+- Saída de áudio: HDMI ou jack 3,5 mm
+
+| Recurso | Precisa de |
+|---|---|
+| Interface gráfica | sessão gráfica (`$DISPLAY`) e `python3-tk` |
+| Respostas da IA | internet + chave de API válida |
+| Falar com a IA | microfone; o modelo Whisper é baixado da internet na **primeira** execução e depois funciona offline |
+| Fotos | webcam acessível em `[camera] device` e OpenCV |
+| Resposta em voz | saída de áudio + Piper (ou espeak-ng) |
 
 ## Instalação
 
 ### 1. Dependências do sistema
 
 ```bash
-+sudo apt install -y portaudio19-dev libsndfile1 espeak-ng libespeak-ng-dev python3-tk
+sudo apt install -y portaudio19-dev libsndfile1 espeak-ng libespeak-ng-dev python3-tk
 ```
 
 Opcional, para diagnosticar a câmera: `sudo apt install v4l-utils` (`v4l2-ctl --list-devices`).
@@ -62,24 +196,34 @@ wget -P voices https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_BR
 ### 3. Python
 
 ```bash
-# Torch CPU (importante: antes do pip install -r)
+python3 -m venv venv && source venv/bin/activate
+
+# Torch CPU (importante: antes do pip install -r). Só o modo terminal (VAD) usa o torch.
 pip install torch --index-url https://download.pytorch.org/whl/cpu
 
 pip install -r requirements.txt
 ```
 
-### 4. Configuração
+Dependências principais (`requirements.txt`): `PyAudio` (microfone),
+`faster-whisper` + `numpy` (STT), `torch` (Silero VAD, modo terminal),
+`opencv-python-headless` (câmera e miniaturas), `google-genai` (LLM),
+`pyttsx3` (TTS alternativo). A interface usa o `tkinter` da biblioteca padrão.
+
+### 4. Configuração e credenciais
 
 ```bash
 cp config/settings.example.toml config/settings.toml
-# Edite settings.toml com os caminhos do Piper e preferências
+# Edite settings.toml: modelo, caminhos do Piper, câmera...
 
-# Crie secrets.toml com sua chave de API (nunca versionar)
+# Chave de API (nunca versionar — já está no .gitignore)
 cat > config/secrets.toml << 'TOML'
 [api]
 key = "SUA_CHAVE_AQUI"
 TOML
 ```
+
+`config/settings.toml` e `config/secrets.toml` estão no `.gitignore`. O
+container Docker recebe a pasta `config/` por volume em tempo de execução.
 
 ### 5. Áudio via HDMI
 
@@ -88,186 +232,150 @@ TOML
 echo 'defaults.pcm.card 0
 defaults.ctl.card 0' > ~/.asoundrc
 
-# Verifica saídas disponíveis
+# Verifica saídas e entradas disponíveis
 aplay -l
+arecord -l
 ```
+
+O microfone usado é o dispositivo de entrada padrão do PortAudio/ALSA; a voz
+sai pelo `aplay` (Piper) ou `espeak-ng`, na saída padrão.
 
 ## Uso
 
 ```bash
-# Detecção automática de voz (VAD)
+# Interface gráfica (padrão): menu → Conversar com a IA
 python core/main.py
 
-# Push-to-Talk via Enter
-python core/main.py --ptt
+# Em janela, sem tela cheia (desenvolvimento)
+python core/main.py --windowed
 
-# Sem TTS (só texto no terminal — útil para desenvolvimento)
+# Sem voz nas respostas
 python core/main.py --no-tts
 
 # Forçar backend de TTS
 python core/main.py --tts-backend espeak
-
-# Manter o mic capturando enquanto o tutor responde (barge-in por voz)
-python core/main.py --allow-barge-in
 ```
 
-## Fotos (webcam → LLM)
+### Modo terminal (legado)
 
-A mesma webcam que capta a voz tira fotos que seguem **junto com a próxima
-pergunta** ao LLM (multimodal). Duas formas de tirar a foto:
+```bash
+python core/main.py --terminal          # detecção automática de voz (VAD)
+python core/main.py --ptt               # Push-to-Talk via Enter (implica --terminal)
+python core/main.py --allow-barge-in    # mic aberto durante a resposta (implica --terminal)
+```
 
-- **Tecla de foto** (`f` por padrão, `[ux] photo_key`): captura na hora e deixa a
-  foto pendente; a próxima pergunta já vai com ela.
-- **Voz**: dizer `"tira uma foto"` ou `"olha isso"` na própria pergunta, por exemplo
-  *"olha isso, que planta é essa?"*. Se disser só o gatilho (*"tira uma foto"*), o tutor
-  tira a foto, avisa por voz e espera a pergunta.
+O modo terminal mantém o comportamento anterior: VAD (Silero) + Whisper,
+resposta em voz, janela de saída com resposta em Markdown e flash-card do
+tópico (`[display]`), foto pela tecla `f` ou por voz ("tira uma foto", "olha
+isso, ..."), e "resetar"/"nova sessão" por voz para apagar o histórico.
 
-A foto só é consumida quando a resposta chega (cancelar ou erro de API mantêm a foto),
-expira em `photo_ttl_s` segundos e pode ser descartada com a tecla de cancelamento
-quando não há nada em andamento. A imagem é reduzida (lado maior `max_side`) e enviada
-em JPEG; o flash-card do tópico também recebe a foto. Nada é gravado em disco, a menos
-que `[camera] save_dir` seja preenchido.
+| Tecla (modo terminal) | Ação |
+|---|---|
+| **Espaço** | Cancela o pedido em andamento (stream do LLM + fala) e devolve o mic |
+| **Enter** (PTT) | Começa/encerra a gravação |
+| **Espaço** (PTT, gravando) | Descarta o áudio gravado |
+| **F** | Tira uma foto para a próxima pergunta (`[ux] photo_key`) |
+| **Espaço** (nada em andamento) | Descarta a foto pendente |
+| **Ctrl+C** | Encerra o programa |
+
+### Diagnóstico da câmera
 
 ```bash
 python -m vision.camera --list              # índices de câmera que entregam frames
-python -m vision.camera --device 0 -o t.jpg # foto de teste, sem o resto do pipeline
+python -m vision.camera --device 0 -o t.jpg # foto de teste, sem o resto do app
 ```
-
-> A foto continua no histórico da sessão (o LLM pode se referir a ela depois) e é
-> reenviada a cada turno: dizer **"resetar"** limpa o histórico e alivia o payload.
-
-## Controles
-
-| Tecla | Ação |
-|---|---|
-| **Espaço** | Cancela o pedido em andamento: interrompe o stream do LLM, corta a fala do TTS na hora e devolve o mic |
-| **Enter** (PTT) | Começa/encerra a gravação; durante a resposta é ignorado (mic mutado) |
-| **Espaço** (PTT, gravando) | Descarta o áudio gravado sem enviar |
-| **F** (foto) | Tira uma foto para a próxima pergunta (se `[camera]` estiver ativa; configurável em `[ux] photo_key`) |
-| **Espaço** (sem nada em andamento) | Descarta a foto pendente |
-| **Ctrl+C** | Encerra o programa (restaura o terminal) |
-
-> A tecla de cancelamento é configurável em `[ux] cancel_key` (`space`,
-> `esc`, `enter`, `tab`, `backspace`, `ctrl+c` ou uma letra). O padrão é
-> **Espaço** porque o display Tk usa **Esc** para sair da tela cheia.
-
-
-## Docker
-
-```bash
-# Build local (arquitetura do host)
-docker build -t hai .
-
-# Run (monta config com secrets)
-docker run -it --rm \
-  --device /dev/snd \
-  --device /dev/video0 \
-  -v $(pwd)/config:/app/config \
-  hai
-
-# Build multi-arch (amd64 + arm64) via Buildx
-docker buildx build --platform linux/amd64,linux/arm64 -t hai .
-```
-
-## Display (janela X11 no HDMI)
-
-O `display/` renderiza a resposta do tutor em Markdown numa janela X11,
-mais um **flash-card** com o resumo do tópico da pergunta atual, gerado
-pela LLM a cada utterance:
-
-<pre>
-┌──────────────────────────────────────┬──────────────────┐
-│                                      │ Resumo do        │
-│  ## Resposta em Markdown do tutor    │    tópico        │
-│  negrito, itálico, código,           │                  |
-│  listas, blocos de código etc.       │ ## Fotossíntese  │
-│                                      │ Resumo: ...      │
-│                                      │ - ponto 1        │
-│                                      │ - ponto 2        │
-└──────────────────────────────────────┴──────────────────┘
-</pre>
-Se não houver `tkinter` disponível ou nenhum servidor X (`$DISPLAY`), o
-driver cai automaticamente em modo headless: o pipeline continua
-funcionando normalmente (texto no terminal + áudio), só sem a janela.
-
-Configuração em `config/settings.toml`:
-
-```toml
-[display]
-enabled = true
-fullscreen = true 
-width = 1024 
-height = 600
-font_size = 20
-flashcard_width = 340 
-```
-
 
 ## Configuração (`config/settings.toml`)
 
-```toml
-[api]
-model = "gemma-4-26b-a4b-it"
+Veja `config/settings.example.toml` (comentado). Seções:
 
-[stt]
-language = "pt"
-whisper_model = "small"       # tiny | small | medium
-whisper_device = "cpu"
-whisper_compute_type = "int8" # sempre int8 na CPU
-
-[vad]
-threshold = 0.5
-preroll_ms = 500
-silence_ms = 700
-interim_interval_ms = 1500    # 0 = desativa streaming parcial
-
-[tts]
-backend = "piper"             # piper | espeak | pyttsx3
-piper_bin   = "/home/rafa/piper/piper/piper"
-piper_model = "/home/rafa/piper/voices/pt_BR-faber-medium.onnx"
-rate = 160
-lang = "pt-br"
-
-[display]
-enabled = true
-fullscreen = true 
-width = 1024 
-height = 600
-font_size = 20
-flashcard_width = 340 
-
-[camera]
-enabled = true
-device = 0                    # índice V4L2 ou "/dev/video0" — a mesma webcam do microfone
-width = 1280
-height = 720
-max_side = 1024               # lado maior (px) da foto enviada ao LLM
-jpeg_quality = 85
-warmup_frames = 8             # estabiliza exposição/branco antes do frame final
-photo_ttl_s = 120             # foto pendente expira sem pergunta
-save_dir = ""                 # vazio = não grava fotos em disco
-
-[ux]
-mute_while_responding = true  # false = mic continua aberto durante a resposta (barge-in)
-cancel_key = "space"          # tecla de cancelamento (Esc é usado pelo display p/ tela cheia)
-photo_key = "f"               # tecla de foto (vazio = só gatilho de voz)
-```
+| Seção | Usada por | Principais chaves |
+|---|---|---|
+| `[api]` | ambos | `model`, `timeout_s` (espera máxima por trecho da resposta; padrão 30) |
+| `[stt]` | ambos | `language`, `whisper_model` (tiny/small/medium), `whisper_device`, `whisper_compute_type` |
+| `[vad]` | terminal | `threshold`, `preroll_ms`, `silence_ms`, `interim_interval_ms` |
+| `[tts]` | ambos | `backend` (piper/espeak/pyttsx3), `piper_bin`, `piper_model`, `rate`, `lang` |
+| `[display]` | ambos | `fullscreen`, `width`, `height`; `enabled`, `font_size`, `flashcard_width` só no terminal |
+| `[camera]` | ambos | `enabled`, `device`, `width`, `height`, `max_side`, `jpeg_quality`, `warmup_frames`, `photo_ttl_s` (terminal), `save_dir` |
+| `[ux]` | terminal | `mute_while_responding`, `cancel_key`, `photo_key` |
 
 ## Testes
 
 ```bash
 pip install -r requirements-dev.txt
 pytest tests/ -v
+
+# Sem tela (CI/SSH): os testes da interface (tests/test_app.py) são pulados,
+# a menos que haja um X virtual:
+xvfb-run -a pytest tests/ -v
 ```
+
+Os testes não precisam de microfone, câmera, rede nem chave de API: os
+serviços são substituídos por dublês (`tests/fakes.py`, mocks do
+`google-genai`). Cobrem a lógica da conversa (`test_chat_session.py`), a
+aplicação gráfica com Tk real (`test_app.py`: menu, navegação repetida sem
+vazamento, encerramento, layout em 1024 × 600, fluxo pela tela), o cliente LLM,
+o gravador, os serviços e os módulos anteriores.
+
+## Adicionar um módulo
+
+1. Crie `modules/<nome>/` com uma subclasse de `modules.base.Module`:
+   ```python
+   class MeuModulo(Module):
+       id = "meu-modulo"
+       title = "Minha atividade"
+
+       def draw_icon(self, canvas, size): ...           # ícone do cartão do menu
+       def unavailable_reason(self): return None        # ou um motivo legível
+       async def enter(self, parent, go_back): ...      # monta a tela em `parent` e abre recursos
+       async def exit(self): ...                        # cancela tarefas e libera recursos
+   ```
+2. Inclua-o em `modules/__init__.py` → `build_modules()`. O menu se monta a partir dessa lista.
+3. Use os serviços de `self.services` (LLM, TTS, câmera, `get_asr()`) em vez de criar novos.
+   Recursos próprios do módulo (microfone, timers `after`, binds globais, tarefas)
+   devem ser liberados em `exit()`. Widgets criados dentro de `parent` são
+   destruídos pelo app.
+4. Separe a lógica (testável sem Tk) da tela, como em `modules/chat/`.
+
+## Docker
+
+```bash
+docker build -t hai .
+
+# O container não tem servidor X: roda o modo terminal (CMD usa --terminal)
+docker run -it --rm \
+  --device /dev/snd \
+  --device /dev/video0 \
+  -v $(pwd)/config:/app/config \
+  hai
+
+docker buildx build --platform linux/amd64,linux/arm64 -t hai .
+```
+
+Para a interface gráfica dentro do container, repasse o X
+(`-e DISPLAY=$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix`) e rode `python core/main.py`.
+
+## Limitações conhecidas
+
+- **Teclado na tela**: a navegação, a voz, as fotos e o envio funcionam só com
+  toque, mas digitar ou corrigir texto exige teclado (físico ou virtual do
+  sistema). Não há teclado virtual próprio.
+- **Latência do LLM**: modelos lentos (ex.: `gemma-4-26b-a4b-it` com imagens)
+  podem levar dezenas de segundos para o primeiro trecho. Estourado
+  `[api] timeout_s`, a tela mostra o erro e a pergunta volta ao rascunho;
+  aumente o valor se for frequente.
+- **Primeira execução**: o Whisper é baixado da internet; até lá o botão de voz
+  mostra "Preparando a voz…" (ou "Voz indisponível" se falhar). Texto e foto
+  continuam funcionando.
+- **Sem anexar arquivos**: as fotos vêm só da webcam (a POC também aceitava
+  arquivo do aparelho, o que não faz sentido no Pi sem gerenciador de arquivos de toque).
+- **Flash-card do tópico** existe só no modo terminal; a tela de conversa segue a POC.
+- Se o LLM devolver uma resposta vazia, a pergunta pode ter ficado no histórico da sessão; reenviá-la pode repeti-la.
 
 ## Targets de latência
 
 | Etapa | Target |
 |---|---|
 | STT (whisper small int8) | < 2s |
-| Início da resposta falada | < 1s após transcrição |
-| Ciclo completo | < 3–5s |
-
-## Palavras-chave de controle
-
-Dizer **"resetar"** ou **"nova sessão"** durante a conversa apaga o histórico e reinicia a sessão com o LLM.
+| Início da resposta falada | < 1s após o primeiro trecho do LLM |
+| Ciclo completo | < 3–5s (depende do modelo remoto) |

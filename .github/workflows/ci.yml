@@ -42,7 +42,7 @@ jobs:
       - name: Dependências do sistema
         run: |
           sudo apt-get update
-          sudo apt-get install -y portaudio19-dev espeak-ng libespeak-ng-dev
+          sudo apt-get install -y portaudio19-dev espeak-ng libespeak-ng-dev xvfb
 
       - name: Instalar torch CPU
         run: pip install torch --index-url https://download.pytorch.org/whl/cpu
@@ -92,7 +92,8 @@ jobs:
       - name: Executar testes
         env:
           PYTHONPATH: .
-        run: pytest tests/ -v --tb=short
+        # xvfb-run: servidor X virtual para os testes da interface Tk (tests/test_app.py)
+        run: xvfb-run -a pytest tests/ -v --tb=short
 
   docker:
     name: Build Docker (multi-arch)

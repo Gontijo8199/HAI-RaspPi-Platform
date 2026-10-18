@@ -61,4 +61,6 @@ VOLUME ["/app/config"]
 ENV PIPER_BIN=/opt/piper/piper/piper
 ENV PIPER_MODEL=/opt/piper/voices/pt_BR-faber-medium.onnx
 
-CMD ["python", "core/main.py"]
+# O container roda sem servidor X: usa o modo terminal (voz). Para a interface
+# gráfica (menu + módulos), repasse o X (ver nota acima) e troque por core/main.py.
+CMD ["python", "core/main.py", "--terminal"]

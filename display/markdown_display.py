@@ -19,7 +19,7 @@ import queue
 import threading
 from typing import Any
 
-from display.markdown_parser import parse_markdown
+from display import tk_markdown
 
 logger = logging.getLogger(__name__)
 
@@ -238,8 +238,8 @@ class MarkdownDisplay:
         )
         flashcard_text.pack(fill="both", expand=True)
 
-        self._configure_tags(response_text, body_font, mono_font)
-        self._configure_tags(flashcard_text, card_font, mono_font)
+        tk_markdown.configure_tags(response_text, body_font, mono_font, tk_markdown.DARK)
+        tk_markdown.configure_tags(flashcard_text, card_font, mono_font, tk_markdown.DARK)
 
         status_label = tk.Label(
             container,
@@ -258,35 +258,6 @@ class MarkdownDisplay:
         self._flashcard_text = flashcard_text
         self._status_label = status_label
 
-    def _configure_tags(self, widget: Any, body_font: Any, mono_font: Any) -> None:
-        base_size = body_font.cget("size")
-        family = body_font.cget("family")
-
-        for level, delta in ((1, 8), (2, 5), (3, 2), (4, 0), (5, -2), (6, -2)):
-            widget.tag_configure(
-                f"h{level}",
-                font=(family, base_size + delta, "bold"),
-                spacing3=6,
-            )
-        widget.tag_configure("bold", font=(family, base_size, "bold"))
-        widget.tag_configure("italic", font=(family, base_size, "italic"))
-        widget.tag_configure(
-            "code", font=(mono_font.cget("family"), mono_font.cget("size")), background="#333333"
-        )
-        widget.tag_configure(
-            "code_block",
-            font=(mono_font.cget("family"), mono_font.cget("size")),
-            background="#111111",
-            lmargin1=16,
-            lmargin2=16,
-            spacing1=4,
-            spacing3=4,
-        )
-        widget.tag_configure("quote", foreground="#9fb3c8", font=(family, base_size, "italic"))
-        widget.tag_configure("quote_marker", foreground="#5a7a9a")
-        widget.tag_configure("bullet_marker", foreground="#7fb0ff")
-        widget.tag_configure("hr", foreground="#555555")
-
     def _poll_queue(self) -> None:
         try:
             while True:
@@ -295,55 +266,15 @@ class MarkdownDisplay:
                     self._root.quit()
                     return
                 elif kind == "response":
-                    self._render(self._response_text, payload)
+                    tk_markdown.render(self._response_text, payload)
                 elif kind == "flashcard":
-                    self._render(self._flashcard_text, payload)
+                    tk_markdown.render(self._flashcard_text, payload)
                 elif kind == "clear":
-                    self._render(self._response_text, "")
-                    self._render(self._flashcard_text, "")
+                    tk_markdown.render(self._response_text, "")
+                    tk_markdown.render(self._flashcard_text, "")
                 elif kind == "status":
                     if self._status_label is not None:
                         self._status_label.configure(text=payload)
         except queue.Empty:
             pass
         self._root.after(100, self._poll_queue)
-
-    # Markdown handler
-    def _render(self, widget: Any, markdown_text: str) -> None:
-        blocks = parse_markdown(markdown_text)
-        widget.configure(state="normal")
-        widget.delete("1.0", "end")
-
-        for block in blocks:
-            btype = block.type
-            if btype == "blank":
-                widget.insert("end", "\n")
-            elif btype == "hr":
-                widget.insert("end", "─" * 36 + "\n", ("hr",))
-            elif btype == "code_block":
-                widget.insert("end", block.text + "\n", ("code_block",))
-            elif btype == "heading":
-                for run in block.runs:
-                    widget.insert("end", run.text, (f"h{block.level}", *run.tags))
-                widget.insert("end", "\n")
-            elif btype == "bullet":
-                widget.insert("end", "• ", ("bullet_marker",))
-                for run in block.runs:
-                    widget.insert("end", run.text, run.tags)
-                widget.insert("end", "\n")
-            elif btype == "numbered":
-                widget.insert("end", f"{block.index}. ", ("bullet_marker",))
-                for run in block.runs:
-                    widget.insert("end", run.text, run.tags)
-                widget.insert("end", "\n")
-            elif btype == "quote":
-                widget.insert("end", "│ ", ("quote_marker",))
-                for run in block.runs:
-                    widget.insert("end", run.text, ("quote", *run.tags))
-                widget.insert("end", "\n")
-            else:  # paragraph
-                for run in block.runs:
-                    widget.insert("end", run.text, run.tags)
-                widget.insert("end", "\n")
-
-        widget.configure(state="disabled")

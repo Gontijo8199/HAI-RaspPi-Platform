@@ -2,6 +2,9 @@
 endpoint = ""
 key = ""
 model = ""
+# Espera máxima (s) por cada trecho da resposta do LLM. Modelos lentos (ex.: gemma-4
+# com imagem) podem precisar de 60 ou mais; estourado, a tela mostra o erro.
+timeout_s = 30
 
 [stt]
 model_path = ""
@@ -21,6 +24,8 @@ rate = 160
 lang = "pt-br"
 
 [display]
+# fullscreen/width/height valem para a interface gráfica (menu + módulos) e para a
+# janela do modo terminal; enabled, font_size e flashcard_width só para o modo terminal.
 driver = ""
 enabled = true       
 fullscreen = true   
