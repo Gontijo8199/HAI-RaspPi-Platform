@@ -17,6 +17,9 @@ Controle (UX):
   camada de rede, mata o áudio do TTS e limpa as tasks do pipeline. Não é
   Esc de propósito: o display Tk usa Esc para sair da tela cheia.
 - No modo PTT, a tecla de cancelamento durante a gravação descarta o áudio.
+- Foto (opcional): a webcam tira uma foto pela tecla de foto ([ux] photo_key) ou por
+  voz ("tira uma foto", "olha isso..."); a foto segue junto com a próxima pergunta ao
+  LLM. A tecla de cancelamento, sem nada em andamento, descarta a foto pendente.
 - Hotkeys rodam numa thread leitora (termios cbreak) e chegam ao event loop
   por fila assíncrona; sem TTY (CI/docker), tudo degrada sem teclado.
 """
@@ -38,6 +41,7 @@ from display.markdown_display import MarkdownDisplay
 from stt.capture import WhisperStream
 from stt.ptt import PttStream
 from tts.speaker import TTSSpeaker
+from vision.camera import CameraCapture
 
 logging.basicConfig(
     level=logging.INFO,
@@ -103,6 +107,44 @@ def _build_tts(settings: dict, tts_backend: str | None, no_tts: bool) -> TTSSpea
         rate=tts_cfg.get("rate", 160),
         lang=tts_cfg.get("lang", "pt-br"),
     )
+
+
+def _build_camera(settings: dict) -> CameraCapture | None:
+    cam_cfg = settings.get("camera", {})
+    if not cam_cfg.get("enabled", True):
+        logger.info("Câmera desativada via config/settings.toml [camera] enabled=false.")
+        return None
+    return CameraCapture(
+        device=cam_cfg.get("device", 0),
+        width=cam_cfg.get("width", 1280),
+        height=cam_cfg.get("height", 720),
+        max_side=cam_cfg.get("max_side", 1024),
+        jpeg_quality=cam_cfg.get("jpeg_quality", 85),
+        warmup_frames=cam_cfg.get("warmup_frames", 8),
+        save_dir=cam_cfg.get("save_dir") or None,
+    )
+
+
+def _register_photo_key(
+    settings: dict, hotkeys: HotkeyListener, pipeline: HAIPipeline, cancel_key: str
+) -> str | None:
+    """Liga a tecla de foto ([ux] photo_key) ao pipeline. None = sem tecla (voz continua)."""
+    raw = settings.get("ux", {}).get("photo_key", "f")
+    if not raw:
+        return None
+    try:
+        key = parse_key(raw)
+    except ValueError as exc:
+        logger.warning("%s Tecla de foto desativada (o gatilho de voz continua).", exc)
+        return None
+    if key in {cancel_key, "enter", "ctrl+c"}:
+        logger.warning(
+            "A tecla de foto (%s) conflita com outra função. Escolha outra em [ux] photo_key.",
+            pretty_key(key),
+        )
+        return None
+    hotkeys.register(key, pipeline.request_photo)
+    return key
 
 
 class _NullTTS:
@@ -189,16 +231,34 @@ async def async_main(
         display = None
         logger.info("Display desativado via config/settings.toml [display] enabled=false.")
 
+    # Câmera (opcional): fotos anexadas à pergunta do aluno.
+    camera = _build_camera(settings)
+    photo_ttl_s = settings.get("camera", {}).get("photo_ttl_s", 120.0)
+
     # Pipeline orquestrador
     pipeline = HAIPipeline(
         llm_client=llm_client,
         tts=tts,
         display=display,
+        camera=camera,
+        photo_ttl_s=photo_ttl_s,
     )
 
     # Teclas de controle (cancelamento/Ctrl+C). Sem TTY, degrada sem hotkeys.
     hotkeys = HotkeyListener()
     await hotkeys.start()
+
+    camera_controls: list[tuple[str, str]] = []
+    if camera is not None:
+        photo_key = _register_photo_key(settings, hotkeys, pipeline, cancel_key)
+        if photo_key and hotkeys.available:
+            camera_controls.append((pretty_key(photo_key), "tirar foto para a próxima pergunta"))
+        camera_controls.append(('Dizer "tira uma foto"', 'ou "olha isso, ..." junto da pergunta'))
+        if not await asyncio.to_thread(camera.probe):
+            ui.warn(
+                f"Câmera {camera.device!r} indisponível — as fotos vão falhar até ela responder. "
+                "Veja os dispositivos com: python -m vision.camera --list"
+            )
 
     # STT (VAD ou PTT)
     if ptt:
@@ -235,6 +295,7 @@ async def async_main(
             ("Ctrl+C", "encerrar o programa"),
         ]
 
+    controls[-1:-1] = camera_controls  # antes de "Ctrl+C"
     ui.banner(mode, controls)
     if mute_during_response:
         ui.dim("Mic pausado automaticamente enquanto o tutor responde.\n")
@@ -355,6 +416,7 @@ def _handle_cancel(pipeline, tts) -> None:
 
     - Turno do pipeline em curso: ele mesmo imprime o ✗ na linha do texto.
     - Só o TTS drenando (fim da resposta): corta o áudio e reporta.
+    - Foto pendente (sem nada em andamento): descarta a foto.
     - Nada acontecendo: avisa e segue.
     """
     turn_busy = pipeline.busy
@@ -364,6 +426,8 @@ def _handle_cancel(pipeline, tts) -> None:
         return  # feedback já dado pelo pipeline
     if tts_busy:
         ui.cancelled()
+    elif pipeline.discard_photo():
+        pass  # o pipeline já avisou "Foto descartada"
     else:
         ui.dim("Nada em andamento para cancelar.")
 

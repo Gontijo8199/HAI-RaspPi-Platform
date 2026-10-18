@@ -11,6 +11,10 @@ numpy>=1.24.0
 # VAD (Silero)
 torch>=2.0.0
 
+# Câmera (fotos da webcam). Headless: sem GUI, não conflita com o Tk do display.
+# No Pi OS também serve: sudo apt install python3-opencv
+opencv-python-headless>=4.8.0
+
 # LLM
 google-genai>=1.0.0
 
