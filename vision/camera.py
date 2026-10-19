@@ -1,17 +1,17 @@
 """
-Captura de foto pela webcam — a mesma usada como microfone (UVC + UAC são
+Captura de foto pela webcam - a mesma usada como microfone (UVC + UAC são
 interfaces USB independentes, então abrir o vídeo não atrapalha o PyAudio).
 
-Design (mesmo padrão de stt/audio_stream.py e tts/speaker.py):
+Design:
 - A câmera é aberta SOB DEMANDA: abre, descarta alguns frames (auto-exposição e
   balanço de branco precisam estabilizar), captura 1 frame e fecha. Não mantém
-  o dispositivo aberto — poupa CPU/USB no Pi e evita conflito com outros apps.
+  o dispositivo aberto - poupa CPU/USB no Pi e evita conflito com outros apps.
 - capture() é async e roda o OpenCV em asyncio.to_thread: nunca bloqueia o loop.
-- Um lock serializa capturas concorrentes (ex.: hotkey apertada duas vezes).
+- Um lock serializa capturas concorrentes (ex.: botão Foto tocado duas vezes).
 - O frame é reduzido (lado maior = max_side) e comprimido em JPEG antes de sair:
   menos banda e menos tokens de imagem no LLM.
 - cv2 é importado tardiamente: sem OpenCV o resto do programa continua de pé e
-  só a captura falha (com CameraError, que o pipeline trata).
+  só a captura falha (com CameraError, que o módulo mostra como aviso).
 - Falhas viram CameraError; nada aqui lança exceção "crua" do OpenCV.
 
 Diagnóstico (a partir da raiz do projeto)::
@@ -79,32 +79,6 @@ def _encode_jpeg(frame: Any, max_side: int, quality: int) -> tuple[bytes, int, i
     if not ok:
         raise CameraError("Falha ao codificar a foto em JPEG.")
     return buffer.tobytes(), width, height
-
-
-def thumbnail_png(image: CapturedImage, max_side: int) -> bytes | None:
-    """Miniatura PNG da foto, para exibir na interface Tk (que não lê JPEG).
-
-    Retorna None se o OpenCV não estiver disponível ou a imagem não decodificar —
-    a interface mostra só o rótulo da foto nesse caso.
-    """
-    try:
-        cv2 = _import_cv2()
-        import numpy as np
-
-        frame = cv2.imdecode(np.frombuffer(image.data, dtype=np.uint8), cv2.IMREAD_COLOR)
-        if frame is None:
-            return None
-        height, width = frame.shape[:2]
-        scale = min(max_side / max(height, width), 1.0)
-        if scale < 1.0:
-            frame = cv2.resize(
-                frame, (round(width * scale), round(height * scale)), interpolation=cv2.INTER_AREA
-            )
-        ok, buffer = cv2.imencode(".png", frame)
-        return buffer.tobytes() if ok else None
-    except Exception as exc:
-        logger.debug("Miniatura indisponível: %s", exc)
-        return None
 
 
 class CameraCapture:

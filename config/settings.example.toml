@@ -1,64 +1,54 @@
+# Copie para config/settings.toml. Todas as chaves são opcionais: sem elas valem
+# os padrões indicados. A chave da API fica em config/secrets.toml ([api] key).
+
 [api]
-endpoint = ""
-key = ""
-model = ""
+model = "gemma-4-26b-a4b-it"
 # Espera máxima (s) por cada trecho da resposta do LLM. Modelos lentos (ex.: gemma-4
 # com imagem) podem precisar de 60 ou mais; estourado, a tela mostra o erro.
 timeout_s = 30
 
 [stt]
-model_path = ""
 language = "pt"
-
-[vad]
-threshold = 0.5
-preroll_ms = 500
-silence_ms = 700
-interim_interval_ms = 1500
+whisper_model = "small"          # tiny | base | small | medium | large-v3
+whisper_device = "cpu"
+whisper_compute_type = "int8"
+# Carrega o Whisper em segundo plano logo depois que o menu aparece, para não
+# travar a interface ao entrar no chat (o carregamento disputa a CPU).
+preload = true
 
 [tts]
 backend = "piper"             # piper | espeak | pyttsx3
+# Vazios: usa $PIPER_BIN / $PIPER_MODEL (definidos no Dockerfile) ou "piper" do PATH.
 piper_bin   = "/home/pi/piper/piper/piper"
 piper_model = "/home/pi/piper/voices/pt_BR-faber-medium.onnx"
 rate = 160
 lang = "pt-br"
 
 [display]
-# fullscreen/width/height valem para a interface gráfica (menu + módulos) e para a
-# janela do modo terminal; enabled, font_size e flashcard_width só para o modo terminal.
-driver = ""
-enabled = true       
-fullscreen = true   
-width = 1024   
+fullscreen = true
+width = 1024          # tamanho da janela quando fullscreen = false (ou --windowed)
 height = 600
-font_size = 20
-flashcard_width = 340 
+# Teclado na tela (Qt Virtual Keyboard, pt-BR): abre ao tocar num campo; o aluno
+# pode desligá-lo no menu ⋯ do chat. false: não carrega o teclado e o método de
+# entrada é o do sistema (teclado físico com teclas mortas, IBus etc.).
+on_screen_keyboard = true
+# Com um só módulo ativo, abre-o direto ao iniciar (← Menu ainda leva ao menu).
+open_single_module = false
+
+[modules]
+# Liga ou desliga módulos do menu, sobrescrevendo o padrão de modules/__init__.py
+# (REGISTRY). O módulo de exemplo vem desligado.
+# chat = true
+# exemplo = true
 
 [camera]
 enabled = true
-# A webcam que também serve de microfone. Índice do V4L2 (0 = /dev/video0) ou caminho.
-# Em muitas webcams /dev/video1 é só metadados: ache o nó certo com
-#   python -m vision.camera --list
-device = 4
+# Índice do V4L2 (0 = /dev/video0) ou caminho. Em muitas webcams /dev/video1 é
+# só metadados: ache o nó certo com   python -m vision.camera --list
+device = 0
 width = 1280
 height = 720
 max_side = 1024       # lado maior (px) da foto enviada ao LLM (menos banda e menos tokens)
 jpeg_quality = 85
 warmup_frames = 8     # frames descartados p/ estabilizar exposição e balanço de branco
-photo_ttl_s = 120     # foto pendente expira se a pergunta não vier nesse tempo
 save_dir = ""         # vazio = não grava fotos em disco (privacidade); preencha só p/ depurar
-
-[ux]
-# Pausa o microfone enquanto o tutor processa e fala a resposta
-# (evita captar o próprio tutor ou falas ao acaso durante o turno).
-# Desative para permitir interrupção por voz (barge-in) — ou use --allow-barge-in.
-mute_while_responding = true
-
-# Tecla que cancela o pedido em andamento (fala do TTS + stream do LLM) e
-# descarta gravação no modo PTT. Evite "esc": o display Tk usa Esc para sair
-# da tela cheia. Opções: space | esc | enter | tab | backspace | ctrl+c | letra.
-cancel_key = "space"
-
-# Tecla que tira uma foto para a próxima pergunta (vazio = só gatilho de voz).
-# Não pode repetir a tecla de cancelamento, Enter nem Ctrl+C.
-photo_key = "f"

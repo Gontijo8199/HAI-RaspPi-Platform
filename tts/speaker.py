@@ -33,9 +33,9 @@ class TTSSpeaker:
     piper_model : str
         Caminho para o arquivo .onnx da voz Piper.
     rate : int
-        Velocidade de fala (palavras por minuto) — usado pelo espeak/pyttsx3.
+        Velocidade de fala (palavras por minuto) - usado pelo espeak/pyttsx3.
     volume : float
-        Volume entre 0.0 e 1.0 — usado pelo pyttsx3.
+        Volume entre 0.0 e 1.0 - usado pelo pyttsx3.
     lang : str
         Código de idioma para espeak-ng (ex.: 'pt-br').
     """
@@ -43,8 +43,8 @@ class TTSSpeaker:
     def __init__(
         self,
         backend: str = "piper",
-        piper_bin: str = "/home/rafa/piper/piper/piper",
-        piper_model: str = "/home/rafa/piper/voices/pt_BR-faber-medium.onnx",
+        piper_bin: str = "piper",
+        piper_model: str = "",
         rate: int = 160,
         volume: float = 0.9,
         lang: str = "pt-br",
@@ -56,7 +56,7 @@ class TTSSpeaker:
         self._volume = volume
         self._lang = lang
 
-        # Processos em andamento (para interrupção imediata via Esc)
+        # Processos em andamento (para interrupção imediata por stop_speaking)
         self._current_proc: subprocess.Popen | None = None  # player de áudio
         self._source_proc: subprocess.Popen | None = None  # gerador (piper)
         self._proc_lock = threading.Lock()

@@ -1,14 +1,40 @@
 # Dockerfile — HAI Platform
 # Build multi-arch: linux/amd64 (dev/CI) e linux/arm64 (Raspberry Pi 5)
+#
+# A aplicação é gráfica (Qt Quick): o container não tem tela própria e usa a
+# sessão Wayland do hospedeiro, o microfone/alto-falante e a webcam dele.
+# Exemplo de execução (detalhes no README, seção Docker):
+#
+#   docker run --rm \
+#     -e WAYLAND_DISPLAY=$WAYLAND_DISPLAY -e XDG_RUNTIME_DIR=/tmp/xdg \
+#     -v $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY:/tmp/xdg/$WAYLAND_DISPLAY \
+#     --device /dev/dri \
+#     --device /dev/snd --device /dev/video0 \
+#     -v "$PWD/config:/app/config:ro" \
+#     ghcr.io/gontijo8199/hai-raspi-module:latest
 
 FROM python:3.12-slim
 
 # Dependências do sistema
+# - libegl1, libgl1, libxkbcommon0, libfontconfig1, libdbus-1-3, libwayland-*:
+#   o que o Qt (PySide6, do pip) precisa do sistema para abrir a janela no
+#   Wayland. fonts-dejavu-core: fonte da interface.
+# - portaudio19-dev + build-essential: compilar o PyAudio.
+# - alsa-utils: aplay, que toca o áudio do Piper.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     python3-dev \
-    python3-tk \
+    libegl1 \
+    libgl1 \
+    libxkbcommon0 \
+    libfontconfig1 \
+    libdbus-1-3 \
+    libwayland-client0 \
+    libwayland-cursor0 \
+    libwayland-egl1 \
+    fonts-dejavu-core \
     portaudio19-dev \
+    alsa-utils \
     libsndfile1 \
     espeak-ng \
     libespeak-ng-dev \
@@ -33,34 +59,20 @@ RUN mkdir -p /opt/piper/voices && \
 
 WORKDIR /app
 
-# Instala torch CPU antes do resto (evita baixar versão CUDA)
-RUN pip install --upgrade pip && \
-    pip install torch --index-url https://download.pytorch.org/whl/cpu
-
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
+# Falha o build já aqui se o Qt Quick não carregar (não precisa de tela).
+RUN QT_QPA_PLATFORM=offscreen python -c "from PySide6.QtGui import QGuiApplication; from PySide6.QtQuick import QQuickView; QGuiApplication([])"
 
 COPY . .
 
-# secrets.toml deve ser montado em runtime — nunca buildar com ele
+# settings.toml e secrets.toml são montados em runtime — nunca buildar com eles.
 VOLUME ["/app/config"]
 
-# NOTA: python3-tk via apt (acima) provê o tkinter para o Python do sistema.
-# A imagem oficial python:3.12-slim compila seu próprio interpretador em
-# /usr/local/bin/python, então valide com `python -c "import tkinter"` após
-# o build. Além disso, exibir a janela X11 de dentro do container exige
-# repassar o socket do X (-e DISPLAY=$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix)
-# no `docker run` — não incluído no exemplo padrão deste README, que roda
-# só com [display] enabled=false (modo headless).
-
-# Câmera: o container precisa enxergar a webcam (`--device /dev/video0`, além de
-# /dev/snd). O OpenCV vem do requirements.txt (opencv-python-headless): valide com
-# `python -c "import cv2"` após o build e, se faltar alguma lib nativa, instale-a via apt.
-
-# Variáveis de ambiente para os caminhos do Piper dentro do container
+# Lidos por core/services.py quando [tts] piper_bin/piper_model não estão no settings.toml.
 ENV PIPER_BIN=/opt/piper/piper/piper
 ENV PIPER_MODEL=/opt/piper/voices/pt_BR-faber-medium.onnx
 
-# O container roda sem servidor X: usa o modo terminal (voz). Para a interface
-# gráfica (menu + módulos), repasse o X (ver nota acima) e troque por core/main.py.
-CMD ["python", "core/main.py", "--terminal"]
+# Interface gráfica em tela cheia. Sem $WAYLAND_DISPLAY nem $DISPLAY, sai com
+# código 1 e explica o motivo.
+CMD ["python", "core/main.py"]

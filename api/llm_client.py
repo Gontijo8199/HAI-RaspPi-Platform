@@ -64,17 +64,6 @@ def _nota_de_foto(images: Sequence[CapturedImage]) -> str:
     return f"(O aluno anexou {len(images)} fotos tiradas agora pela câmera do tablet.)"
 
 
-def _montar_conteudo(mensagem: str, images: Sequence[CapturedImage] | None) -> str | list[Any]:
-    """Texto puro quando não há imagem; senão [imagens..., texto] (imagem antes do texto)."""
-    if not images:
-        return mensagem
-    partes: list[Any] = [
-        types.Part.from_bytes(data=img.data, mime_type=img.mime_type) for img in images
-    ]
-    partes.append(f"{mensagem}\n{_nota_de_foto(images)}")
-    return partes
-
-
 def _montar_partes(partes: Sequence[MessagePart]) -> list[Any]:
     """Mensagem composta (texto e fotos intercalados), preservando a ordem do aluno."""
     imagens = [p for p in partes if isinstance(p, CapturedImage)]
@@ -96,9 +85,9 @@ class LLMClient:
     SYSTEM_PROMPT = """\
         Você é um tutor virtual de apoio escolar para alunos do Ensino Fundamental II (6º ao 9º ano).
 
-        Você receberá transcrições automáticas de voz geradas pelo Whisper, que podem conter
+        O aluno monta cada mensagem com trechos digitados, trechos falados e fotos, na ordem
+        que preferir. Os trechos falados são transcrições automáticas (Whisper) e podem conter
         erros de reconhecimento, palavras incompletas, repetições, hesitações ou pontuação incorreta.
-        Na tela de conversa, o aluno também pode digitar trechos e intercalar fotos com o texto.
 
         Diretrizes de interpretação:
         - Interprete a intenção da pergunta, corrigindo mentalmente apenas erros evidentes de transcrição.
@@ -131,30 +120,6 @@ class LLMClient:
           pessoas na foto, concentre-se só no conteúdo escolar da pergunta.
     """
 
-    FLASHCARD_SYSTEM_PROMPT = """\
-        Você gera flash-cards de resumo para um tutor virtual escolar.
-
-        Dada a transcrição de uma pergunta de um aluno do Ensino Fundamental II,
-        produza um flash-card curto em Markdown identificando o tópico/matéria
-        sendo discutido. Formato obrigatório:
-
-        ## <Título curto do tópico, 2 a 5 palavras>
-        **Resumo:** <uma frase objetiva sobre o que está sendo discutido>
-        - <ponto-chave 1, até 8 palavras>
-        - <ponto-chave 2, até 8 palavras>
-
-        Regras:
-        - Responda somente com o Markdown acima, sem texto antes ou depois.
-        - Português brasileiro, direto, sem jargão técnico.
-        - No máximo 3 bullets.
-        - Se houver uma foto anexada, use-a para identificar o tópico (ex.: o exercício ou o
-          objeto mostrado), sem identificar pessoas pelo rosto.
-        - Se a pergunta for incompreensível, use "## Pergunta não identificada"
-          como título e um resumo genérico.
-    """
-
-    # TODO: Exportar prompts para arquivos externos
-
     def __init__(
         self,
         api_key: str,
@@ -166,17 +131,8 @@ class LLMClient:
         self._client = genai.Client(api_key=api_key)
         self._chat = self._nova_sessao()
         # Evento da stream em andamento — usado por cancel_stream() para
-        # interromper a thread de rede imediatamente (tecla Esc).
+        # interromper a thread de rede imediatamente (botão Parar, saída do módulo).
         self._cancel_event: threading.Event | None = None
-
-    async def send_stream(
-        self, transcription: str, images: Sequence[CapturedImage] | None = None
-    ) -> AsyncIterator[str]:
-        mensagem = f'Transcrição do aluno:\n"""\n{transcription}\n"""'
-        # aclosing: fechar este gerador fecha o interno na hora (sinaliza a thread de rede).
-        async with contextlib.aclosing(self._stream(_montar_conteudo(mensagem, images))) as stream:
-            async for token in stream:
-                yield token
 
     async def send_parts_stream(self, partes: Sequence[MessagePart]) -> AsyncIterator[str]:
         """Envia uma mensagem composta (textos e fotos na ordem) numa única requisição."""
@@ -184,7 +140,7 @@ class LLMClient:
             async for token in stream:
                 yield token
 
-    async def _stream(self, conteudo: str | list[Any]) -> AsyncIterator[str]:
+    async def _stream(self, conteudo: list[Any]) -> AsyncIterator[str]:
         """Stream de tokens da sessão atual. Falhas viram LLMError (mensagem legível)."""
         queue: asyncio.Queue[str | _StreamFailure | None] = asyncio.Queue()
         loop = asyncio.get_running_loop()
@@ -225,7 +181,7 @@ class LLMClient:
                 yield token
         finally:
             # Cobre tanto o fim natural quanto o fechamento do gerador
-            # (task cancelada via Esc): sinaliza a thread de rede parar.
+            # (task cancelada): sinaliza a thread de rede parar.
             cancelled.set()
             if self._cancel_event is cancelled:
                 self._cancel_event = None
@@ -241,35 +197,6 @@ class LLMClient:
         if self._cancel_event is not None:
             self._cancel_event.set()
             logger.info("Stream LLM cancelado.")
-
-    async def send(self, transcription: str, images: Sequence[CapturedImage] | None = None) -> str:
-        tokens: list[str] = []
-        async for token in self.send_stream(transcription, images):
-            tokens.append(token)
-        return "".join(tokens).strip()
-
-    async def generate_flashcard(
-        self, transcription: str, images: Sequence[CapturedImage] | None = None
-    ) -> str:
-        mensagem = f'Pergunta do aluno:\n"""\n{transcription}\n"""'
-        conteudo = _montar_conteudo(mensagem, images)
-        loop = asyncio.get_running_loop()
-
-        def _call() -> str:
-            response = self._client.models.generate_content(
-                model=self.model,
-                contents=conteudo,
-                config=types.GenerateContentConfig(
-                    system_instruction=self.FLASHCARD_SYSTEM_PROMPT,
-                ),
-            )
-            return (response.text or "").strip()
-
-        try:
-            return await asyncio.wait_for(loop.run_in_executor(None, _call), timeout=self.timeout)
-        except Exception as exc:
-            logger.error("Erro ao gerar flashcard: %s", type(exc).__name__)
-            return ""
 
     def resetar_sessao(self) -> None:
         self._chat = self._nova_sessao()

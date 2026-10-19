@@ -1,80 +1,51 @@
-from unittest.mock import AsyncMock, MagicMock
+"""Fixtures dos testes de interface com Qt Quick de verdade (utilitários em qthelpers.py).
 
-import pytest
+Rodam sem servidor gráfico: a plataforma "offscreen" do Qt desenha em memória.
+O teclado da tela é o mesmo da aplicação (Qt Virtual Keyboard). Os serviços
+são dublês (tests/fakes.py): nada de rede, microfone ou câmera.
+"""
 
-from vision.image import CapturedImage
+import os
+
+# Antes de qualquer QGuiApplication (só nasce na fixture qapp).
+if not os.environ.get("QT_QPA_PLATFORM"):
+    os.environ["QT_QPA_PLATFORM"] = "offscreen"
+
+import pytest  # noqa: E402
+from fakes import FakeServices  # noqa: E402
+from PySide6.QtGui import QGuiApplication  # noqa: E402
+from qthelpers import pump  # noqa: E402
+
+from core.app import App, configure_qt  # noqa: E402
+from modules import REGISTRY, build_modules  # noqa: E402
+
+configure_qt(on_screen_keyboard=True)
 
 
-@pytest.fixture
-def settings():
-    return {
-        "api": {"model": "gemma-4-26b-a4b-it"},
-        "stt": {
-            "language": "pt",
-            "whisper_model": "tiny",
-            "whisper_device": "cpu",
-            "whisper_compute_type": "int8",
-        },
-        "vad": {
-            "threshold": 0.5,
-            "preroll_ms": 500,
-            "silence_ms": 700,
-            "interim_interval_ms": 1500,
-        },
-        "tts": {
-            "backend": "espeak",
-            "piper_bin": "/opt/piper/piper/piper",
-            "piper_model": "/opt/piper/voices/pt_BR-faber-medium.onnx",
-            "rate": 160,
-            "lang": "pt-br",
-        },
-    }
+@pytest.fixture(scope="session")
+def qapp():
+    app = QGuiApplication.instance() or QGuiApplication(["hai-tests"])
+    yield app
 
 
 @pytest.fixture
-def mock_llm_client():
-    client = MagicMock()
-    client.send = AsyncMock(return_value="Resposta de teste.")
+async def make_app(qapp):
+    apps = []
 
-    async def _fake_stream(text, images=None):
-        for token in ["Resposta ", "de ", "teste."]:
-            yield token
+    def factory(modules=None, open_single_module=False, **kwargs):
+        services = FakeServices(**kwargs)
+        # Por padrão, todos os módulos registrados, ativos ou não: a interface de
+        # cada um continua testada mesmo desativada no menu padrão.
+        if modules is None:
+            modules = build_modules(services, enabled=list(REGISTRY))
+        elif callable(modules):
+            modules = modules(services)
+        app = App(services, modules, fullscreen=False, open_single_module=open_single_module)
+        app.build()
+        apps.append(app)
+        return app
 
-    client.send_stream = MagicMock(side_effect=_fake_stream)
-    client.generate_flashcard = AsyncMock(
-        return_value="## Tópico de teste\n**Resumo:** um resumo qualquer.\n- ponto 1\n- ponto 2"
-    )
-    return client
-
-
-@pytest.fixture
-def mock_tts():
-    tts = MagicMock()
-    tts.speak = MagicMock()
-    tts.stop_speaking = MagicMock()
-    tts.shutdown = MagicMock()
-    return tts
-
-
-@pytest.fixture
-def mock_display():
-    display = MagicMock()
-    display.show_response = MagicMock()
-    display.show_flashcard = MagicMock()
-    display.clear = MagicMock()
-    display.shutdown = MagicMock()
-    display.available = False
-    return display
-
-
-@pytest.fixture
-def fake_image():
-    return CapturedImage(data=b"\xff\xd8\xff\xe0fake-jpeg", width=640, height=480)
-
-
-@pytest.fixture
-def mock_camera(fake_image):
-    camera = MagicMock()
-    camera.capture = AsyncMock(return_value=fake_image)
-    camera.device = 0
-    return camera
+    yield factory
+    for app in apps:
+        await app.shutdown()
+    await pump(0.02)

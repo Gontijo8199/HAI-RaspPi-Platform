@@ -1,12 +1,12 @@
 """
 Gravação "segurar para falar" da interface de toque (módulo de conversa).
 
-Design (mesmo MicrophoneStream de stt/audio_stream.py, sem VAD):
+Design:
 - open() abre o microfone e o deixa PAUSADO no nível do PortAudio: nada é
   capturado nem retido até o aluno segurar o botão.
 - start() retoma a captura e acumula os chunks numa task do event loop.
 - stop() pausa de novo e devolve o PCM-16 gravado; discard() joga fora.
-- close() fecha o dispositivo — chamado quando o aluno sai do módulo.
+- close() fecha o dispositivo - chamado quando o aluno sai do módulo.
 - A transcrição fica a cargo do WhisperEngine compartilhado (core/services.py),
   então o modelo não é recarregado a cada entrada no módulo.
 """
@@ -74,7 +74,6 @@ class VoiceRecorder:
             mic = self._mic_factory(
                 sample_rate=self.sample_rate,
                 chunk_samples=self._chunk_samples,
-                preroll_ms=0,
                 device_index=self._device_index,
             )
             mic.start(loop)

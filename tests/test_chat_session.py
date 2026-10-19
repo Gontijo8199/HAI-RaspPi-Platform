@@ -1,9 +1,9 @@
-"""Lógica do módulo "Conversar com a IA" (sem Tk, sem hardware, sem rede)."""
+"""Lógica do módulo "Conversar com a IA" (sem Qt, sem hardware, sem rede)."""
 
 import asyncio
 
 import pytest
-from fakes import FakeASR, FakeCamera, FakeLLM, FakeRecorder, FakeTTS, Recorder
+from fakes import FakeASR, FakeCamera, FakeLLM, FakeRecorder, FakeTTS, Recorder, _image
 
 from api.llm_client import LLMError
 from core.services import SpeechUnavailable
@@ -217,9 +217,9 @@ async def test_texto_e_fotos_vao_juntos_e_na_ordem(parts):
 
     (enviado,) = llm.sent  # UMA requisição
     assert enviado[0] == "compare esta"
-    assert isinstance(enviado[1], CapturedImage) and enviado[1].data.endswith(b"\x01")
+    assert isinstance(enviado[1], CapturedImage) and enviado[1].data == _image(1).data
     assert enviado[2] == "com esta"
-    assert isinstance(enviado[3], CapturedImage) and enviado[3].data.endswith(b"\x02")
+    assert isinstance(enviado[3], CapturedImage) and enviado[3].data == _image(2).data
     assert [b.kind for b in session.messages[0].blocks] == ["text", "photo", "text", "photo"]
 
 
@@ -243,8 +243,11 @@ async def test_falha_da_camera_avisa_e_nao_cria_bloco(parts):
     camera.fail = True
     session.take_photo()
     await _idle(session)
-    assert session.draft == []
-    assert any("câmera ocupada" in n for n in listener.notices("error"))
+    assert session.draft == []  # o espaço reservado para a foto sai
+    (erro,) = [e for e in listener.events if e[0] == "notice" and e[1] == "error"]
+    assert "câmera não respondeu" in erro[2]
+    assert "ocupada" not in erro[2]  # detalhe técnico só no log
+    assert erro[3] == "retry_photo"  # a tela oferece "Tentar de novo"
 
 
 async def test_sem_camera_o_botao_avisa():
@@ -263,13 +266,13 @@ async def test_gravar_transcrever_e_compor(parts):
 
     assert session.begin_recording() is True
     assert session.activity is Activity.RECORDING and recorder.recording
-    assert session.draft[0].pending == "gravando..."
+    assert session.draft[0].pending == "gravando…"
     assert session.send() is False  # não envia no meio da gravação
 
     session.finish_recording()
     await _settle()
     assert session.activity is Activity.TRANSCRIBING
-    assert session.draft[0].pending == "transcrevendo..."
+    assert session.draft[0].pending == "transcrevendo…"
     assert session.begin_recording() is False  # sem gravações simultâneas
 
     asr.gate.set()
@@ -420,3 +423,120 @@ async def test_erro_na_tela_nao_derruba_a_sessao(parts):
     session.send()
     await _idle(session)
     assert session.messages[-1].status == "done"
+
+
+# ---------- rascunho editado na tela (editor único) ----------
+
+
+async def test_replace_draft_segue_a_ordem_da_tela_e_mantem_as_fotos(parts):
+    session, llm, *_rest = await _started(parts)
+    session.take_photo()
+    await _idle(session)
+    (foto,) = session.draft
+
+    session.replace_draft(["antes ", foto.id, " depois", 999, ""])  # 999: apagada; "": ignorado
+    assert [b.kind for b in session.draft] == ["text", "photo", "text"]
+    assert session.draft[1] is foto
+
+    session.send()
+    await _idle(session)
+    (enviado,) = llm.sent
+    assert enviado[0] == "antes" and enviado[2] == "depois"
+    assert enviado[1] is foto.image
+
+
+async def test_foto_e_voz_entram_na_posicao_pedida(parts):
+    session, llm, *_rest = await _started(parts)
+    session.replace_draft(["inicio", "fim"])
+
+    session.take_photo(index=1)
+    assert session.draft[1].pending == "tirando foto…"  # posição reservada já na tela
+    assert session.send() is False  # nada sai com captura em andamento
+    await _idle(session)
+    assert [b.kind for b in session.draft] == ["text", "photo", "text"]
+    assert session.draft[1].pending is None and session.draft[1].label == "foto 1"
+
+    assert session.begin_recording(index=1)
+    session.finish_recording()
+    await _idle(session)
+    assert [b.kind for b in session.draft] == ["text", "text", "photo", "text"]
+    assert session.draft[1].text == "quanto é dois mais dois"
+
+
+async def test_foto_nova_avisa_a_tela_e_foca_o_bloco(parts):
+    session, *_rest, listener = await _started(parts)
+    session.take_photo()
+    await _idle(session)
+    (foto,) = session.draft
+    assert ("photo_captured", foto) in listener.events
+    assert ("draft_changed", session.draft, foto.id) in listener.events
+
+
+async def test_limite_de_fotos_por_pergunta(parts):
+    from modules.chat.session import MAX_PHOTOS
+
+    session, *_rest, listener = await _started(parts)
+    for _ in range(MAX_PHOTOS):
+        assert session.take_photo()
+        await _idle(session)
+    assert session.take_photo() is False
+    assert any("até" in n for n in listener.notices("info"))
+
+
+async def test_cancelar_a_captura_remove_o_espaco_da_foto(parts):
+    session, _llm, _tts, _rec, _asr, camera, _l = await _started(parts)
+    camera.gate = asyncio.Event()
+    session.take_photo()
+    await _settle()
+    assert session.activity is Activity.CAPTURING
+    session.cancel()
+    await _idle(session)
+    assert session.draft == []
+
+
+async def test_editar_durante_a_resposta_e_restaurado_junto_em_caso_de_erro(parts):
+    session, llm, *_rest = await _started(parts)
+    llm.gate = asyncio.Event()
+    llm.error = LLMError("Sem conexão com o serviço de IA.")
+    session.replace_draft(["primeira pergunta"])
+    session.send()
+    await _settle()
+    session.replace_draft(["próxima pergunta"])  # o aluno escreve enquanto espera
+    llm.gate.set()
+    await _idle(session)
+    assert [b.text for b in session.draft] == ["primeira pergunta", "próxima pergunta"]
+
+
+# ---------- microfone sem sinal / nada reconhecido ----------
+
+
+async def test_transcricao_vazia_avisa_e_nao_escreve_no_editor(parts):
+    session, llm, _tts, _rec, asr, _cam, listener = await _started(parts)
+    asr.text = "   "
+    session.replace_draft(["minha pergunta"])
+    session.begin_recording()
+    session.finish_recording()
+    await _idle(session)
+    assert [b.text for b in session.draft] == ["minha pergunta"]  # nada foi acrescentado
+    assert any("Não ouvi nada" in n for n in listener.notices("error"))
+
+
+async def test_microfone_mudo_nao_chama_o_whisper(parts):
+    session, _llm, _tts, recorder, asr, _cam, listener = await _started(parts)
+    recorder.audio = b"\x00\x00" * 16000  # 1 s de silêncio digital
+    session.begin_recording()
+    session.finish_recording()
+    await _idle(session)
+    assert asr.calls == 0
+    assert session.draft == []
+    assert any("microfone não captou som" in n for n in listener.notices("error"))
+
+
+def test_nivel_de_audio():
+    from fakes import SPEECH_PCM
+
+    from modules.chat.session import SILENCE_RMS, audio_level
+
+    assert audio_level(b"") == 0.0
+    assert audio_level(b"\x00\x00" * 100) == 0.0
+    assert audio_level(SPEECH_PCM) > 100 * SILENCE_RMS

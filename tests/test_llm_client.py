@@ -5,37 +5,7 @@ import pytest
 
 @patch("google.genai.Client")
 @pytest.mark.asyncio
-async def test_send_retorna_texto(mock_genai):
-    mock_chat = MagicMock()
-    mock_chat.send_message_stream.return_value = iter([MagicMock(text="Resposta do tutor.")])
-    mock_genai.return_value.chats.create.return_value = mock_chat
-
-    from api.llm_client import LLMClient
-
-    client = LLMClient(api_key="fake-key", model="gemma-fake")
-    resposta = await client.send("quanto é 2 mais 2?")
-
-    assert "Resposta do tutor." in resposta
-
-
-@patch("google.genai.Client")
-@pytest.mark.asyncio
-async def test_send_strip_espacos(mock_genai):
-    mock_chat = MagicMock()
-    mock_chat.send_message_stream.return_value = iter([MagicMock(text="  texto com espaços  ")])
-    mock_genai.return_value.chats.create.return_value = mock_chat
-
-    from api.llm_client import LLMClient
-
-    client = LLMClient(api_key="fake-key", model="gemma-fake")
-    resposta = await client.send("teste")
-
-    assert resposta == "texto com espaços"
-
-
-@patch("google.genai.Client")
-@pytest.mark.asyncio
-async def test_send_stream_produz_tokens(mock_genai):
+async def test_send_parts_stream_produz_tokens(mock_genai):
     chunks = [MagicMock(text=t) for t in ["Olá, ", "como ", "posso ", "ajudar?"]]
     mock_chat = MagicMock()
     mock_chat.send_message_stream.return_value = iter(chunks)
@@ -45,7 +15,7 @@ async def test_send_stream_produz_tokens(mock_genai):
 
     client = LLMClient(api_key="fake-key", model="gemma-fake")
     tokens = []
-    async for token in client.send_stream("oi"):
+    async for token in client.send_parts_stream(["oi"]):
         tokens.append(token)
 
     assert tokens == ["Olá, ", "como ", "posso ", "ajudar?"]
@@ -53,7 +23,7 @@ async def test_send_stream_produz_tokens(mock_genai):
 
 @patch("google.genai.Client")
 @pytest.mark.asyncio
-async def test_send_stream_ignora_chunks_vazios(mock_genai):
+async def test_send_parts_stream_ignora_chunks_vazios(mock_genai):
     chunks = [
         MagicMock(text="Bom dia"),
         MagicMock(text=None),
@@ -68,74 +38,10 @@ async def test_send_stream_ignora_chunks_vazios(mock_genai):
 
     client = LLMClient(api_key="fake-key", model="gemma-fake")
     tokens = []
-    async for token in client.send_stream("oi"):
+    async for token in client.send_parts_stream(["oi"]):
         tokens.append(token)
 
     assert tokens == ["Bom dia", "!"]
-
-
-@patch("google.genai.Client")
-@pytest.mark.asyncio
-async def test_generate_flashcard_retorna_texto(mock_genai):
-    mock_response = MagicMock()
-    mock_response.text = "## Fotossíntese\n**Resumo:** conversão de luz em energia.\n- ponto 1"
-    mock_genai.return_value.models.generate_content.return_value = mock_response
-    mock_genai.return_value.chats.create.return_value = MagicMock()
-
-    from api.llm_client import LLMClient
-
-    client = LLMClient(api_key="fake-key", model="gemma-fake")
-    flashcard = await client.generate_flashcard("explica fotossíntese")
-
-    assert flashcard.startswith("## Fotossíntese")
-    mock_genai.return_value.models.generate_content.assert_called_once()
-
-
-@patch("google.genai.Client")
-@pytest.mark.asyncio
-async def test_generate_flashcard_strip_espacos(mock_genai):
-    mock_response = MagicMock()
-    mock_response.text = "  ## Título  \n"
-    mock_genai.return_value.models.generate_content.return_value = mock_response
-    mock_genai.return_value.chats.create.return_value = MagicMock()
-
-    from api.llm_client import LLMClient
-
-    client = LLMClient(api_key="fake-key", model="gemma-fake")
-    flashcard = await client.generate_flashcard("oi")
-
-    assert flashcard == "## Título"
-
-
-@patch("google.genai.Client")
-@pytest.mark.asyncio
-async def test_generate_flashcard_erro_retorna_string_vazia(mock_genai):
-    mock_genai.return_value.models.generate_content.side_effect = RuntimeError("boom")
-    mock_genai.return_value.chats.create.return_value = MagicMock()
-
-    from api.llm_client import LLMClient
-
-    client = LLMClient(api_key="fake-key", model="gemma-fake")
-    flashcard = await client.generate_flashcard("oi")
-
-    assert flashcard == ""
-
-
-@patch("google.genai.Client")
-@pytest.mark.asyncio
-async def test_generate_flashcard_nao_usa_chat_da_sessao(mock_genai):
-
-    mock_response = MagicMock()
-    mock_response.text = "## Título"
-    mock_genai.return_value.models.generate_content.return_value = mock_response
-    mock_genai.return_value.chats.create.return_value = MagicMock()
-
-    from api.llm_client import LLMClient
-
-    client = LLMClient(api_key="fake-key", model="gemma-fake")
-    await client.generate_flashcard("oi")
-
-    client._chat.send_message.assert_not_called()
 
 
 @patch("google.genai.Client")
@@ -154,7 +60,7 @@ def test_resetar_sessao_cria_novo_chat(mock_genai):
     assert mock_genai.return_value.chats.create.call_count == 2
 
 
-# ---------- Cancelamento do stream (tecla Esc) ----------
+# ---------- Cancelamento do stream ----------
 
 
 @patch("google.genai.Client")
@@ -169,7 +75,7 @@ async def test_fechar_o_gerador_limpa_o_evento_de_cancelamento(mock_genai):
     from api.llm_client import LLMClient
 
     client = LLMClient(api_key="fake-key", model="gemma-fake")
-    agen = client.send_stream("oi")
+    agen = client.send_parts_stream(["oi"])
 
     primeiro = await agen.__anext__()
     assert primeiro == "um "
@@ -190,7 +96,7 @@ async def test_stream_completo_limpa_o_estado_de_cancelamento(mock_genai):
     from api.llm_client import LLMClient
 
     client = LLMClient(api_key="fake-key", model="gemma-fake")
-    async for _token in client.send_stream("oi"):
+    async for _token in client.send_parts_stream(["oi"]):
         pass
 
     assert client._cancel_event is None
@@ -217,7 +123,7 @@ async def test_cancel_stream_sinaliza_a_thread(mock_genai):
 
     client = LLMClient(api_key="fake-key", model="gemma-fake")
     tokens = []
-    async for token in client.send_stream("oi"):
+    async for token in client.send_parts_stream(["oi"]):
         tokens.append(token)
         if len(tokens) == 1:
             client.cancel_stream()  # sinaliza sem lançar
@@ -233,63 +139,6 @@ def _imagem():
     from vision.image import CapturedImage
 
     return CapturedImage(data=b"\xff\xd8fake", width=10, height=10)
-
-
-@patch("google.genai.Client")
-@pytest.mark.asyncio
-async def test_send_stream_com_imagem_envia_foto_antes_do_texto(mock_genai):
-    mock_chat = MagicMock()
-    mock_chat.send_message_stream.return_value = iter([MagicMock(text="É uma samambaia.")])
-    mock_genai.return_value.chats.create.return_value = mock_chat
-
-    from api.llm_client import LLMClient
-
-    client = LLMClient(api_key="fake-key", model="gemma-fake")
-    resposta = await client.send("que planta é essa?", images=[_imagem()])
-
-    assert resposta == "É uma samambaia."
-    (conteudo,) = mock_chat.send_message_stream.call_args.args
-    assert isinstance(conteudo, list)
-    assert conteudo[0].inline_data.data == b"\xff\xd8fake"
-    assert conteudo[0].inline_data.mime_type == "image/jpeg"
-    assert "que planta é essa?" in conteudo[-1]
-    assert "foto" in conteudo[-1]
-
-
-@patch("google.genai.Client")
-@pytest.mark.asyncio
-async def test_send_stream_sem_imagem_continua_enviando_texto_puro(mock_genai):
-    mock_chat = MagicMock()
-    mock_chat.send_message_stream.return_value = iter([MagicMock(text="ok")])
-    mock_genai.return_value.chats.create.return_value = mock_chat
-
-    from api.llm_client import LLMClient
-
-    client = LLMClient(api_key="fake-key", model="gemma-fake")
-    await client.send("oi")
-
-    (conteudo,) = mock_chat.send_message_stream.call_args.args
-    assert isinstance(conteudo, str)
-    assert "foto" not in conteudo
-
-
-@patch("google.genai.Client")
-@pytest.mark.asyncio
-async def test_generate_flashcard_com_imagem(mock_genai):
-    mock_response = MagicMock()
-    mock_response.text = "## Plantas"
-    mock_genai.return_value.models.generate_content.return_value = mock_response
-    mock_genai.return_value.chats.create.return_value = MagicMock()
-
-    from api.llm_client import LLMClient
-
-    client = LLMClient(api_key="fake-key", model="gemma-fake")
-    flashcard = await client.generate_flashcard("que planta é essa?", images=[_imagem()])
-
-    assert flashcard == "## Plantas"
-    contents = mock_genai.return_value.models.generate_content.call_args.kwargs["contents"]
-    assert isinstance(contents, list)
-    assert contents[0].inline_data.data == b"\xff\xd8fake"
 
 
 @patch("google.genai.Client")
@@ -364,7 +213,7 @@ async def test_erro_no_meio_do_stream_entrega_tokens_e_depois_falha(mock_genai):
     client = LLMClient(api_key="fake-key", model="gemma-fake")
     recebidos = []
     with pytest.raises(LLMError):
-        async for token in client.send_stream("oi"):
+        async for token in client.send_parts_stream(["oi"]):
             recebidos.append(token)
     assert recebidos == ["parcial"]
 
@@ -389,7 +238,7 @@ async def test_timeout_vira_llm_error(mock_genai):
     client = LLMClient(api_key="fake-key", model="gemma-fake", timeout=0.05)
     try:
         with pytest.raises(LLMError, match="demorou"):
-            async for _ in client.send_stream("oi"):
+            async for _ in client.send_parts_stream(["oi"]):
                 pass
     finally:
         liberar.set()
@@ -420,7 +269,7 @@ async def test_resetar_sessao_durante_o_stream_nao_mistura_conversas(mock_genai)
     from api.llm_client import LLMClient
 
     client = LLMClient(api_key="fake-key", model="gemma-fake")
-    stream = client.send_stream("oi")
+    stream = client.send_parts_stream(["oi"])
     primeiro = await stream.__anext__()
     client.resetar_sessao()  # "Nova conversa" no meio da resposta
     assert [primeiro] + [t async for t in stream] == ["a", "b"]

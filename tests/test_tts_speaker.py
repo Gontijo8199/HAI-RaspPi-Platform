@@ -87,7 +87,7 @@ def test_is_busy_detecta_processo_de_audio_rodando():
 
 
 def test_stop_speaking_termina_player_e_fonte():
-    """Esc deve matar tanto o player (aplay) quanto o gerador (piper)."""
+    """stop_speaking() deve matar tanto o player (aplay) quanto o gerador (piper)."""
     speaker = _make_speaker()
     try:
         player, fonte = MagicMock(), MagicMock()

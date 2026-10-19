@@ -1,7 +1,7 @@
 """
-Lógica do módulo "Conversar com a IA" — sem nenhuma dependência de Tk.
+Lógica do módulo "Conversar com a IA" — sem nenhuma dependência de interface (Qt).
 
-Fluxo (o mesmo da POC conversar-llm.html, ligado aos serviços reais):
+Fluxo:
 1. O aluno monta a pergunta como uma lista ordenada de blocos: texto digitado,
    fala transcrita (segurar para falar → Whisper local) e fotos da webcam.
    Blocos podem ser editados, removidos ou inseridos entre outros.
@@ -34,6 +34,8 @@ from collections.abc import Coroutine
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+import numpy as np
+
 from api.llm_client import LLMError, describe_error
 from core.services import SpeechUnavailable
 from stt.recorder import MicrophoneError
@@ -44,7 +46,21 @@ from vision.image import CapturedImage
 logger = logging.getLogger(__name__)
 
 _SPEAKING_POLL_S = 0.1
-_NO_SPEECH = "(não entendi o áudio — tente falar mais perto do microfone)"
+# RMS (PCM normalizado em [-1, 1]) abaixo do qual a gravação é tratada como
+# microfone mudo/desconectado. Fala baixa fica na casa de 1e-2; o chão de ruído
+# de um microfone ligado, em 1e-3. Silêncio digital (mudo, dispositivo errado) dá ~0.
+SILENCE_RMS = 1e-4
+_NO_SOUND = "O microfone não captou som. Ele está ligado e selecionado?"
+_NO_SPEECH = "Não ouvi nada. Confira se o microfone está ligado e fale perto dele."
+
+
+def audio_level(pcm: bytes) -> float:
+    """RMS do PCM-16 mono, normalizado (0 = silêncio digital)."""
+    samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+    return float(np.sqrt(np.mean(samples * samples))) if samples.size else 0.0
+
+
+MAX_PHOTOS = 6  # por pergunta: miniaturas embutidas pesam no Pi e no pedido ao LLM
 
 
 class Activity(enum.Enum):
@@ -72,11 +88,13 @@ class DraftBlock:
     text: str = ""
     image: CapturedImage | None = None
     label: str = ""  # "foto 1", ...
-    pending: str | None = None  # "gravando...", "transcrevendo..." (bloco ainda sem texto)
+    pending: str | None = None  # "gravando…", "tirando foto…" (bloco ainda sem conteúdo)
 
     @property
     def is_empty(self) -> bool:
-        return self.kind == "text" and (self.pending is not None or not self.text.strip())
+        if self.pending is not None:
+            return True
+        return self.kind == "text" and not self.text.strip()
 
 
 @dataclass
@@ -98,7 +116,9 @@ class ChatListener(Protocol):
     def message_added(self, message: ChatMessage) -> None: ...
     def message_updated(self, message: ChatMessage) -> None: ...
     def conversation_cleared(self) -> None: ...
-    def notice(self, kind: str, text: str) -> None: ...  # kind: "info" | "error"
+    def photo_captured(self, block: DraftBlock) -> None: ...  # foto nova (pré-visualização)
+    # kind: "info" | "error"; action: "retry_photo" | None (ação oferecida junto ao aviso)
+    def notice(self, kind: str, text: str, action: str | None = None) -> None: ...
 
 
 class ChatSession:
@@ -193,7 +213,7 @@ class ChatSession:
         self._set_activity(Activity.IDLE)
         self._emit("conversation_cleared")
         self._emit("draft_changed", self.draft, None)
-        self._emit("notice", "info", "Conversa nova! A anterior não foi guardada (privacidade).")
+        self._emit("notice", "info", "Conversa apagada.")
 
     # ------------------------------------------------------------------ rascunho
 
@@ -205,6 +225,24 @@ class ChatSession:
             self.draft.insert(index, block)
         self._emit("draft_changed", self.draft, block.id)
         return block
+
+    def replace_draft(self, items: list[str | int]) -> None:
+        """Rascunho editado na tela, na ordem da tela: texto (str) ou id de um bloco
+        existente (foto, gravação em andamento). Não redesenha a tela.
+
+        Ids desconhecidos são ignorados: o aluno apagou a foto no editor.
+        """
+        known = {b.id: b for b in self.draft}
+        if self._recording_block is not None:
+            known.setdefault(self._recording_block.id, self._recording_block)
+        draft: list[DraftBlock] = []
+        for item in items:
+            if isinstance(item, str):
+                if item:
+                    draft.append(DraftBlock(id=next(self._ids), kind="text", text=item))
+            elif item in known:
+                draft.append(known.pop(item))
+        self.draft = draft
 
     def set_text(self, block_id: int, text: str) -> None:
         """Texto editado pelo aluno (não redesenha o rascunho)."""
@@ -228,8 +266,9 @@ class ChatSession:
 
     # ------------------------------------------------------------------ voz
 
-    def begin_recording(self) -> bool:
-        """Botão "segurar para falar" pressionado. Retorna True se começou a gravar."""
+    def begin_recording(self, index: int | None = None) -> bool:
+        """Começa a gravar. A transcrição entra na posição `index` do rascunho
+        (o cursor da tela); sem ela, no fim. Retorna True se começou."""
         if self.voice_status is not VoiceStatus.READY:
             self._emit("notice", "error", self.voice_reason)
             return False
@@ -241,9 +280,9 @@ class ChatSession:
         except MicrophoneError as exc:
             self._emit("notice", "error", str(exc))
             return False
-        block = DraftBlock(id=next(self._ids), kind="text", pending="gravando...")
+        block = DraftBlock(id=next(self._ids), kind="text", pending="gravando…")
         self._recording_block = block
-        self.draft.append(block)
+        self._insert(block, index)
         self._set_activity(Activity.RECORDING)
         self._emit("draft_changed", self.draft, None)
         return True
@@ -260,10 +299,17 @@ class ChatSession:
             audio = await self._recorder.stop()
             if audio is None:
                 self._drop_block(block)
-                self._emit("notice", "info", "Gravação muito curta: segure o botão enquanto fala.")
+                self._emit("notice", "info", "Não ouvi nada. Fale perto do microfone.")
+                return
+            level = audio_level(audio)
+            if level < SILENCE_RMS:
+                # Microfone mudo ou dispositivo errado: nem chama o Whisper.
+                logger.warning("Gravação sem sinal (RMS %.1e).", level)
+                self._drop_block(block)
+                self._emit("notice", "error", _NO_SOUND)
                 return
             self._set_activity(Activity.TRANSCRIBING)
-            self._set_pending(block, "transcrevendo...")
+            self._set_pending(block, "transcrevendo…")
             asr = await self._get_asr()
             text = await asr.transcribe(audio, self._recorder.sample_rate)
         except asyncio.CancelledError:
@@ -278,16 +324,22 @@ class ChatSession:
         except Exception as exc:
             logger.error("Falha na transcrição: %s", type(exc).__name__)
             self._drop_block(block)
-            self._emit("notice", "error", "Não consegui transcrever o áudio. Tente de novo.")
+            self._emit("notice", "error", "Não consegui entender o áudio. Tente de novo.")
             return
         finally:
             if epoch == self._epoch:
                 self._recording_block = None
 
-        if block is not None and block in self.draft:
-            block.pending = None
-            block.text = text.strip() or _NO_SPEECH
-            self._emit("draft_changed", self.draft, None)
+        if block is None or block not in self.draft:
+            return
+        if not text.strip():
+            # Nada reconhecido: o aviso vai para a tela, nunca para o texto da pergunta.
+            self._drop_block(block)
+            self._emit("notice", "error", _NO_SPEECH)
+            return
+        block.pending = None
+        block.text = text.strip()
+        self._emit("draft_changed", self.draft, block.id)
 
     async def _prepare_voice(self) -> None:
         # Vale para a entrada no módulo inteira (não muda com "Nova conversa");
@@ -301,28 +353,46 @@ class ChatSession:
 
     # ------------------------------------------------------------------ foto
 
-    def take_photo(self) -> bool:
+    def take_photo(self, index: int | None = None) -> bool:
+        """Tira uma foto e a põe na posição `index` do rascunho (sem ela, no fim)."""
         if self._camera is None:
-            self._emit("notice", "error", "Câmera desativada nas configurações.")
+            self._emit("notice", "error", "A câmera está desativada nas configurações.")
             return False
         if self.busy:
             return False
+        if sum(1 for b in self.draft if b.kind == "photo") >= MAX_PHOTOS:
+            self._emit("notice", "info", f"Cada pergunta aceita até {MAX_PHOTOS} fotos.")
+            return False
         self._stop_speaking()
-        self._run_activity(self._capture(), Activity.CAPTURING)
+        # O bloco reservado guarda a posição mesmo que o aluno edite durante a captura.
+        block = DraftBlock(id=next(self._ids), kind="photo", pending="tirando foto…")
+        self._insert(block, index)
+        self._emit("draft_changed", self.draft, None)
+        self._run_activity(self._capture(block), Activity.CAPTURING)
         return True
 
-    async def _capture(self) -> None:
+    async def _capture(self, block: DraftBlock) -> None:
         try:
             image = await self._camera.capture()
+        except asyncio.CancelledError:
+            self._drop_block(block)
+            raise
         except CameraError as exc:
-            self._emit("notice", "error", f"Não consegui tirar a foto: {exc}")
+            logger.warning("Falha na captura: %s", exc)
+            self._drop_block(block)
+            self._emit(
+                "notice",
+                "error",
+                "A câmera não respondeu. Verifique se ela está conectada.",
+                "retry_photo",
+            )
             return
+        if block not in self.draft:
+            return  # o aluno apagou o espaço da foto enquanto ela era tirada
         self._photo_count += 1
-        block = DraftBlock(
-            id=next(self._ids), kind="photo", image=image, label=f"foto {self._photo_count}"
-        )
-        self.draft.append(block)
-        self._emit("draft_changed", self.draft, None)
+        block.image, block.pending, block.label = image, None, f"foto {self._photo_count}"
+        self._emit("draft_changed", self.draft, block.id)
+        self._emit("photo_captured", block)
 
     # ------------------------------------------------------------------ envio
 
@@ -332,7 +402,7 @@ class ChatSession:
             return False
         blocks = [b for b in self.draft if not b.is_empty]
         if not blocks:
-            self._emit("notice", "info", "Fale, escreva ou tire uma foto antes de enviar.")
+            self._emit("notice", "info", "Escreva, fale ou tire uma foto antes de enviar.")
             return False
         self._stop_speaking()
         self.draft = []
@@ -380,7 +450,7 @@ class ChatSession:
 
         if not reply.text.strip():
             reply.status = "error"
-            reply.error = "A IA não respondeu nada. Tente de novo."
+            reply.error = "A IA não respondeu nada desta vez."
             self._emit("message_updated", reply)
             self._restore_draft(blocks)
             return
@@ -412,7 +482,9 @@ class ChatSession:
         self._llm.cancel_stream()
         self._tts.stop_speaking()
         if activity in (Activity.THINKING, Activity.RESPONDING):
-            self._emit("notice", "info", "Resposta interrompida. Sua pergunta voltou para edição.")
+            self._emit(
+                "notice", "info", "Resposta interrompida. Sua pergunta voltou para o editor."
+            )
 
     async def _discard_recording(self) -> None:
         await self._recorder.discard()
@@ -440,7 +512,7 @@ class ChatSession:
         self._task = None
         if not task.cancelled() and task.exception() is not None:
             logger.error("Atividade do chat falhou: %s", type(task.exception()).__name__)
-            self._emit("notice", "error", "Algo deu errado. Tente de novo.")
+            self._emit("notice", "error", "Não deu certo desta vez. Tente de novo.")
         self._set_activity(Activity.IDLE)
 
     def _spawn_background(self, coro: Coroutine) -> None:
@@ -462,6 +534,12 @@ class ChatSession:
         self._tts.stop_speaking()
         self._recording_block = None
         self._sending = []
+
+    def _insert(self, block: DraftBlock, index: int | None) -> None:
+        if index is None or not 0 <= index <= len(self.draft):
+            self.draft.append(block)
+        else:
+            self.draft.insert(index, block)
 
     def _wipe(self) -> None:
         self.draft = []

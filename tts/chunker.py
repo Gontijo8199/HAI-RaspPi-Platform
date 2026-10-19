@@ -1,12 +1,12 @@
 """
 Quebra o stream de tokens do LLM em frases para o TTS começar a falar antes
-da resposta terminar. Compartilhado pelo modo terminal (core/pipeline.py) e
-pelo módulo de conversa da interface gráfica (modules/chat/session.py).
+da resposta terminar. Usado por modules/chat/session.py; fica em tts/ porque
+não depende do chat e serve a qualquer módulo que fale um texto em stream.
 
 Regras:
 - Fim de frase ('.', '?', '!', quebra de linha) libera a frase na hora.
 - Sem fim de frase, um buffer com _MIN_TTS_CHARS ou mais é cortado na última
-  vírgula (se ela não estiver no começo) ou inteiro — evita silêncio longo.
+  vírgula (se ela não estiver no começo) ou inteiro - evita silêncio longo.
 """
 
 SENTENCE_ENDS = {".", "?", "!", "\n"}

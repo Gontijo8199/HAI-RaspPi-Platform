@@ -28,7 +28,7 @@ class WhisperEngine:
     device : str
         'cpu' para Raspberry Pi.
     compute_type : str
-        'int8' — quantização de 8 bits, ~2–4× mais rápido que float32 na CPU.
+        'int8' - quantização de 8 bits, ~2–4× mais rápido que float32 na CPU.
     language : str
         Código BCP-47 do idioma (ex.: 'pt').
     beam_size : int
@@ -68,9 +68,8 @@ class WhisperEngine:
             language=self.language,
             beam_size=self.beam_size,
             temperature=0.0,
-            # VAD interno do faster-whisper remove silêncio antes do decoder.
-            # Complementa (não substitui) o SileroVAD upstream
-            # age sobre trechos de silêncio que escaparam do VAD de onset/offset.
+            # VAD interno do faster-whisper: corta o silêncio antes e depois da
+            # fala (o aluno segura o botão um pouco antes de falar e solta depois).
             vad_filter=True,
             vad_parameters={
                 "threshold": 0.45,  # levemente mais sensível que o padrão

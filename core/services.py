@@ -2,9 +2,14 @@
 Configuração e serviços compartilhados (LLM, TTS, câmera, Whisper).
 
 Os serviços são criados UMA vez por execução e reaproveitados por todos os
-módulos e pelo modo terminal — voltar ao menu não recarrega o Whisper nem
-recria o cliente LLM. O que é específico de uma conversa (microfone aberto,
-histórico, fotos) pertence ao módulo e é liberado na saída dele.
+módulos — voltar ao menu não recarrega o Whisper nem recria o cliente LLM.
+O que é específico de uma atividade (microfone aberto, histórico, fotos)
+pertence ao módulo e é liberado na saída dele.
+
+Nenhum serviço abre dispositivo na construção: a câmera abre a cada foto, o
+microfone só existe dentro do módulo (make_recorder) e o Whisper carrega na
+primeira chamada de get_asr(). Um módulo que não usa esses serviços (ex.:
+modules/exemplo) não paga por eles.
 
 Falhas de configuração não derrubam a aplicação: viram mensagens legíveis
 (`config_problems`, `llm_problem`) que o menu mostra ao usuário.
@@ -14,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import tomllib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -92,8 +98,9 @@ def build_tts(settings: dict, tts_backend: str | None, no_tts: bool) -> TTSSpeak
     backend = tts_backend or tts_cfg.get("backend", "piper")
     return TTSSpeaker(
         backend=backend,
-        piper_bin=tts_cfg.get("piper_bin", "/home/rafa/piper/piper/piper"),
-        piper_model=tts_cfg.get("piper_model", "/home/rafa/piper/voices/pt_BR-faber-medium.onnx"),
+        # PIPER_BIN/PIPER_MODEL: definidos no Dockerfile; o settings.toml tem prioridade.
+        piper_bin=tts_cfg.get("piper_bin") or os.environ.get("PIPER_BIN", "piper"),
+        piper_model=tts_cfg.get("piper_model") or os.environ.get("PIPER_MODEL", ""),
         rate=tts_cfg.get("rate", 160),
         lang=tts_cfg.get("lang", "pt-br"),
     )
@@ -133,7 +140,7 @@ def build_llm(settings: dict, secrets: dict) -> tuple[LLMClient | None, str | No
 
 
 class Services:
-    """Serviços de uma execução da aplicação gráfica.
+    """Serviços compartilhados de uma execução da aplicação.
 
     Parâmetros
     ----------
@@ -161,8 +168,11 @@ class Services:
         self.llm, self.llm_problem = build_llm(settings, secrets)
         self.tts: Any = build_tts(settings, tts_backend, no_tts)
         self.camera = build_camera(settings)
+        # Preferência de interface lida pelos módulos que têm campos de texto.
+        self.on_screen_keyboard = bool(settings.get("display", {}).get("on_screen_keyboard", True))
         self._asr: WhisperEngine | None = None
         self._asr_task: asyncio.Task | None = None
+        self._preload_task: asyncio.Task | None = None
 
     @property
     def voice_output_available(self) -> bool:
@@ -194,6 +204,21 @@ class Services:
             ) from exc
         return self._asr
 
+    def preload_asr(self) -> None:
+        """Começa a carregar o Whisper sem ninguém esperar. Idempotente; falha só
+        vai para o log (quem chamar get_asr() depois tenta de novo)."""
+        if self._asr is not None or self._asr_task is not None or self._preload_task is not None:
+            return
+
+        async def run() -> None:
+            try:
+                await self.get_asr()
+            except SpeechUnavailable:
+                pass  # get_asr() já registrou o motivo
+
+        self._preload_task = asyncio.get_running_loop().create_task(run(), name="asr-preload")
+        logger.info("Pré-carregando o reconhecimento de voz.")
+
     def _load_asr(self) -> WhisperEngine:
         from stt.whisper_engine import WhisperEngine
 
@@ -217,5 +242,6 @@ class Services:
             self.llm.cancel_stream()
         self.tts.stop_speaking()
         self.tts.shutdown()
-        if self._asr_task is not None and not self._asr_task.done():
-            self._asr_task.cancel()
+        for task in (self._preload_task, self._asr_task):
+            if task is not None and not task.done():
+                task.cancel()

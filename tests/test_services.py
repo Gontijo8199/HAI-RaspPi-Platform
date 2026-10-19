@@ -84,3 +84,44 @@ async def test_cancelar_quem_espera_nao_cancela_o_carregamento():
             await espera
         liberar.set()
         assert await services.get_asr() == "engine"
+
+
+def test_teclado_na_tela_vem_ligado_por_padrao_e_pode_ser_desligado():
+    assert _services().on_screen_keyboard is True
+    services = Services(
+        {"camera": {"enabled": False}, "display": {"on_screen_keyboard": False}}, {}, no_tts=True
+    )
+    assert services.on_screen_keyboard is False
+
+
+def test_caminhos_do_piper_vem_do_ambiente_quando_o_settings_nao_define(monkeypatch):
+    from core.services import build_tts
+
+    monkeypatch.setenv("PIPER_BIN", "/opt/piper/piper/piper")
+    monkeypatch.setenv("PIPER_MODEL", "/opt/piper/voices/voz.onnx")
+    with patch("core.services.TTSSpeaker") as speaker:
+        build_tts({"tts": {"backend": "piper"}}, None, False)
+        build_tts({"tts": {"piper_bin": "/meu/piper"}}, None, False)
+    first, second = speaker.call_args_list
+    assert first.kwargs["piper_bin"] == "/opt/piper/piper/piper"
+    assert first.kwargs["piper_model"] == "/opt/piper/voices/voz.onnx"
+    assert second.kwargs["piper_bin"] == "/meu/piper"  # settings.toml tem prioridade
+
+
+async def test_preload_carrega_uma_vez_em_segundo_plano():
+    services = _services()
+    engine = MagicMock()
+    with patch.object(Services, "_load_asr", return_value=engine) as load:
+        services.preload_asr()
+        services.preload_asr()  # idempotente
+        assert await services.get_asr() is engine  # quem chega depois reaproveita
+    load.assert_called_once()
+
+
+async def test_falha_no_preload_nao_vaza_excecao_e_permite_tentar_de_novo():
+    services = _services()
+    with patch.object(Services, "_load_asr", side_effect=[OSError("sem rede"), "ok"]):
+        services.preload_asr()
+        await asyncio.sleep(0.05)
+        assert services._preload_task.done() and services._preload_task.exception() is None
+        assert await services.get_asr() == "ok"

@@ -1,34 +1,44 @@
 """
 Contrato mínimo de um módulo educacional exibido no menu principal.
+Referência mais curta de uma implementação: modules/exemplo/.
+
+Um módulo é uma pasta com:
+- module.py: a subclasse de Module (registro no menu e ciclo de vida);
+- controller.py: um QObject com o estado e as ações da tela (testável sem QML);
+- Page.qml: a tela, que só lê o controller e chama os slots dele;
+- icon.svg: o ícone do cartão do menu.
 
 Ciclo de vida (controlado por core/app.py, nunca pelo próprio módulo):
 
-    módulo = ChatModule(services)    # construção: barata, sem abrir recurso nenhum
-    await módulo.enter(frame, voltar)  # usuário tocou no cartão: monta a tela e
-                                       # adquire os recursos da atividade
-    await módulo.exit()                # voltou ao menu (ou o app está fechando):
-                                       # cancela tarefas e libera os recursos da
-                                       # atividade; o frame é destruído pelo app
-    await módulo.close()               # app encerrando: libera o que o módulo
-                                       # manteve entre entradas (normalmente nada)
+    módulo = ExampleModule(services)          # construção: barata, sem abrir recurso nenhum
+    controller = await módulo.enter(voltar)   # toque no cartão: adquire os recursos e
+                                              # devolve o controller; a App empilha
+                                              # Page.qml com ele como `controller`
+    await módulo.exit()                       # voltou ao menu (ou o app está fechando):
+                                              # cancela tarefas e libera os recursos;
+                                              # a App já tirou a página da pilha
+    await módulo.close()                      # app encerrando: libera o que o módulo
+                                              # manteve entre entradas (normalmente nada)
 
 Regras:
 - enter()/exit() sempre alternam; exit() precisa ser seguro mesmo se enter()
   falhou no meio.
 - Serviços caros e compartilhados (LLM, TTS, Whisper, câmera) vêm de
   core.services.Services e NÃO são encerrados pelo módulo.
-- Os widgets criados dentro do frame são destruídos junto com ele, então
-  binds de widget não se acumulam entre entradas. Binds globais (bind_all) e
-  timers (after) precisam ser desfeitos em exit().
+- O controller não deve fazer nada depois de exit(): timers parados, slots
+  ignorados (a página ainda pode estar na animação de saída).
 """
 
 from __future__ import annotations
 
-import tkinter as tk
+import inspect
 from collections.abc import Callable
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from PySide6.QtCore import QObject
+
     from core.services import Services
 
 
@@ -37,6 +47,13 @@ class Module:
     id: str = ""
     #: Texto do cartão no menu.
     title: str = ""
+    #: Linha curta abaixo do título no cartão (opcional).
+    summary: str = ""
+    #: Usa reconhecimento de voz: a App pré-carrega o Whisper enquanto o menu está aberto.
+    uses_speech: bool = False
+    #: Arquivos da pasta do módulo: ícone do cartão e tela.
+    icon: str = "icon.svg"
+    page: str = "Page.qml"
 
     def __init__(self, services: Services):
         self.services = services
@@ -45,10 +62,11 @@ class Module:
         """Motivo legível para o módulo não poder abrir agora (None = pode abrir)."""
         return None
 
-    def draw_icon(self, canvas: tk.Canvas, size: int) -> None:
-        """Desenha o ícone do cartão do menu (Canvas size×size, já com o fundo)."""
+    def resource(self, name: str) -> Path:
+        """Arquivo `name` da pasta do módulo."""
+        return Path(inspect.getfile(type(self))).parent / name
 
-    async def enter(self, parent: tk.Frame, go_back: Callable[[], None]) -> None:
+    async def enter(self, go_back: Callable[[], None]) -> QObject:
         raise NotImplementedError
 
     async def exit(self) -> None:

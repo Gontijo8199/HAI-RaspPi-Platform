@@ -1,176 +1,233 @@
-"""Aplicação gráfica com Tk de verdade: menu, navegação, ciclo de vida e layout.
-
-Precisa de um servidor X ($DISPLAY). Sem ele (CI headless), os testes são pulados.
-Os serviços são dublês (tests/fakes.py): nada de rede, microfone ou câmera.
+"""Aplicação gráfica com Qt Quick de verdade (offscreen): menu, navegação, ciclo
+de vida e o módulo de exemplo. A tela do chat tem os testes em test_chat_page.py.
 """
 
 import asyncio
-import tkinter as tk
 
-import pytest
-from fakes import FakeServices
+from PySide6.QtCore import QObject, Qt
+from qthelpers import (
+    click,
+    find,
+    find_all,
+    items,
+    key,
+    label,
+    pump,
+    screen_items,
+    type_text,
+    until,
+)
 
-from core.app import App
-from modules import build_modules
+from core.app import short_reason
+from modules.base import Module
 from modules.chat import ChatModule
-from modules.chat.session import Activity
-
-
-@pytest.fixture(scope="module")
-def root():
-    try:
-        window = tk.Tk()
-    except tk.TclError as exc:
-        pytest.skip(f"sem servidor X para o Tk: {exc}")
-    window.geometry("1024x600+0+0")
-    yield window
-    window.destroy()
-
-
-@pytest.fixture
-def make_app(root):
-    apps = []
-
-    def factory(**kwargs):
-        services = FakeServices(**kwargs)
-        app = App(services, build_modules(services), root=root)
-        app.build()
-        apps.append(app)
-        pump(root)
-        return app
-
-    yield factory
-    for app in apps:
-        if app._container is not None:
-            app._container.destroy()
-    pump(root)
-
-
-def pump(root, n=3):
-    for _ in range(n):
-        root.update()
-
-
-async def settle(root, seconds=0.05):
-    loop = asyncio.get_running_loop()
-    end = loop.time() + seconds
-    while loop.time() < end:
-        root.update()
-        await asyncio.sleep(0.005)
-
-
-async def until(root, predicate, timeout=2.0):
-    loop = asyncio.get_running_loop()
-    end = loop.time() + timeout
-    while not predicate():
-        if loop.time() > end:
-            raise AssertionError("condição não atingida a tempo")
-        root.update()
-        await asyncio.sleep(0.005)
-
-
-def descendants(widget):
-    out = []
-    for child in widget.winfo_children():
-        out.append(child)
-        out.extend(descendants(child))
-    return out
-
-
-async def type_text(view, root, text):
-    """Toca em "Escrever" e digita no campo novo (o campo é a fonte da verdade)."""
-    antes = set(view._draft_texts)
-    view.write_button.invoke()
-    await settle(root)
-    (novo,) = set(view._draft_texts) - antes
-    view._draft_texts[novo].insert("1.0", text)
+from modules.exemplo import ExampleModule
+from ui import images
 
 
 def chat_of(app) -> ChatModule:
     return next(m for m in app.modules if isinstance(m, ChatModule))
 
 
+def example_of(app) -> ExampleModule:
+    return next(m for m in app.modules if isinstance(m, ExampleModule))
+
+
+class Dummy(Module):
+    """Módulo mínimo para testar o menu com N cartões (usa a página do exemplo)."""
+
+    def __init__(self, services, n, reason=None):
+        super().__init__(services)
+        self.id, self.title, self._reason = f"m{n}", f"Atividade {n}", reason
+        self.entered = 0
+
+    def unavailable_reason(self):
+        return self._reason
+
+    def resource(self, name):
+        return ExampleModule.resource(ExampleModule(self.services), name)
+
+    async def enter(self, go_back):
+        self.entered += 1
+        from modules.exemplo.controller import ExampleController
+
+        return ExampleController(self.title, go_back)
+
+    async def exit(self):
+        pass
+
+
+def dummies(n, **kwargs):
+    return lambda services: [Dummy(services, i, **kwargs) for i in range(n)]
+
+
+def depth(app) -> int:
+    return find(app.window, "stack").property("depth")
+
+
 # ---------- menu ----------
 
 
-async def test_menu_aparece_com_apenas_o_modulo_de_conversa(make_app, root):
+async def test_menu_lista_os_modulos_registrados_na_ordem(make_app):
     app = make_app()
-    assert app.menu.frame.winfo_ismapped()
-    assert list(app.menu.cards) == ["chat"]
-    labels = [
-        w.cget("text") for w in descendants(app.menu.cards["chat"]) if isinstance(w, tk.Label)
-    ]
-    assert "Conversar com a IA" in labels
-    assert app.menu.message == ""
+    await pump()
+    cards = [i.objectName() for i in find_all(app.window, "card_")]
+    assert cards == ["card_chat", "card_exemplo"]
+    assert find(app.window, "menuMessage") is None  # sem problema, sem aviso
 
 
-async def test_problema_de_configuracao_aparece_no_menu(make_app, root):
-    app = make_app(llm_problem="Chave da API não configurada.")
-    assert "Chave da API" in app.menu.message
-    assert await app.enter_module(chat_of(app)) is False  # não abre, explica
+async def test_problema_de_configuracao_aparece_no_menu(make_app):
+    app = make_app(llm_problem="Falta a chave da API: crie config/secrets.toml.")
+    await pump()
+    message = find(app.window, "menuMessage")
+    assert "Falta a chave da API" in label(message)
+
+
+async def test_um_modulo_vira_cartao_grande_e_centralizado(make_app):
+    app = make_app(modules=dummies(1))
+    await pump(0.2)
+    (card,) = find_all(app.window, "card_")
+    assert card.width() >= 420 and card.height() >= 260
+    middle = card.mapToScene(card.boundingRect().center())
+    assert abs(middle.x() - app.window.width() / 2) < 4
+
+
+async def test_grade_centralizada_de_ate_tres_colunas(make_app):
+    app = make_app(modules=dummies(5))
+    await pump(0.2)
+    cards = find_all(app.window, "card_")
+    rows = sorted({round(c.mapToScene(c.boundingRect().topLeft()).y()) for c in cards})
+    assert len(rows) == 2  # 3 + 2
+    first_row = [c for c in cards if round(c.mapToScene(c.boundingRect().topLeft()).y()) == rows[0]]
+    assert len(first_row) == 3
+
+
+async def test_muitos_modulos_rolam_com_o_titulo_fixo(make_app):
+    app = make_app(modules=dummies(9))
+    await pump(0.2)
+    scroll = find(app.window, "menuScroll")
+    assert scroll.property("interactive") is True
+    assert scroll.property("contentHeight") > scroll.height()
+
+
+async def test_sem_modulos_o_menu_explica(make_app):
+    app = make_app(modules=[])
+    await pump()
+    assert "Nenhum módulo ativo" in label(find(app.window, "menuMessage"))
+
+
+async def test_cartao_indisponivel_mostra_o_motivo_curto(make_app):
+    reason = "Falta a chave da API: crie config/secrets.toml. Veja o README."
+    app = make_app(modules=dummies(2, reason=reason))
+    await pump()
+    assert short_reason(reason) == "Falta a chave da API"
+    card = find(app.window, "card_m0")
+    assert any("⚠ Falta a chave da API" == label(i) for i in items(app.window) if i.parentItem()
+               and _inside(card, i))  # fmt: skip
+
+    click(app.window, card)
+    await pump(0.1)
     assert app.active is None
-    assert "Conversar com a IA" in app.menu.message
+    assert app.modules[0].entered == 0
+    assert "Atividade 0: Falta a chave da API" in label(find(app.window, "menuMessage"))
 
 
-# ---------- navegação e recursos ----------
+def _inside(ancestor, item) -> bool:
+    while item is not None:
+        if item is ancestor:
+            return True
+        item = item.parentItem()
+    return False
 
 
-async def test_entrar_e_voltar_ao_menu(make_app, root):
+async def test_abrir_direto_com_um_unico_modulo(make_app):
+    app = make_app(modules=dummies(1), open_single_module=True)
+    await until(lambda: app.active is not None)
+    await pump(0.3)
+    assert find(app.window, "examplePage") is not None
+    assert depth(app) == 2  # o menu continua embaixo: ← Menu volta para ele
+
+    sozinho_indisponivel = make_app(modules=dummies(1, reason="sem chave"), open_single_module=True)
+    await pump(0.1)
+    assert sozinho_indisponivel.active is None
+
+
+# ---------- navegação ----------
+
+
+async def test_tocar_no_cartao_entra_e_menu_volta(make_app):
     app = make_app()
+    await pump()
     chat = chat_of(app)
-    assert await app.enter_module(chat) is True
-    await settle(root)
-    assert app.active is chat
-    assert not app.menu.frame.winfo_ismapped()
+    click(app.window, find(app.window, "card_chat"))
+    await until(lambda: app.active is chat)
+    await pump(0.3)
+    assert find(app.window, "chatPage") is not None
     recorder = app.services.recorders[-1]
     assert recorder.opened == 1  # microfone aberto (pausado) só dentro do módulo
 
-    chat.view.back_button.invoke()  # botão "← Voltar" (toque)
-    await until(root, lambda: app.active is None)
-    await settle(root)
-    assert app.menu.frame.winfo_ismapped()
+    click(app.window, find(app.window, "backButton"))  # sem pergunta em edição: sai direto
+    await until(lambda: app.active is None)
+    await pump(0.3)
+    assert depth(app) == 1
+    assert find(app.window, "chatPage") is None
     assert recorder.closed == 1
-    assert chat.session is None and chat.view is None
+    assert chat.session is None and chat.controller is None
 
 
-async def test_navegacao_repetida_nao_acumula_recursos(make_app, root):
+async def test_navegacao_repetida_nao_acumula_recursos(make_app):
     app = make_app()
-    chat = chat_of(app)
+    chat, example = chat_of(app), example_of(app)
+    # Aquecimento: o Qt cria a camada dos popups (QQuickOverlay) uma vez só, no
+    # primeiro uso; a contagem de referência é a de depois disso.
+    await app.enter_module(chat)
+    await pump(0.3)
+    await app.leave_module()
+    await pump(0.4)
     tarefas_iniciais = len(asyncio.all_tasks())
-    widgets_no_menu = len(descendants(root))
-    timers_iniciais = len(root.tk.splitlist(root.tk.call("after", "info")))
+    itens_no_menu = len(screen_items(app.window))
 
     for _ in range(5):
         assert await app.enter_module(chat)
-        await settle(root)
-        chat.view.notice("info", "aviso com timer")  # cria um after()
+        await pump(0.3)
+        chat.controller.notice("info", "aviso com timer")
+        chat.controller.takePhoto(0)  # foto registrada na memória de imagens
+        await pump(0.1)
         await app.leave_module()
-        await settle(root)
-        assert len(descendants(root)) == widgets_no_menu
+        await pump(0.4)
+        assert depth(app) == 1
+        assert len(screen_items(app.window)) == itens_no_menu
         assert len(asyncio.all_tasks()) <= tarefas_iniciais
+        assert images.stored() == 0  # fotos não sobrevivem à saída
 
-    assert len(root.tk.splitlist(root.tk.call("after", "info"))) <= timers_iniciais
-    assert len(app.services.recorders) == 5
+        assert await app.enter_module(example)
+        await pump(0.3)
+        await app.leave_module()
+        await pump(0.4)
+        assert len(screen_items(app.window)) == itens_no_menu
+        assert example.controller is None
+
+    assert len(app.services.recorders) == 6
     assert all(r.opened == 1 and r.closed == 1 for r in app.services.recorders)
-    assert app.services.llm.resets == 10  # entrada e saída: conversa nunca sobrevive
+    assert app.services.llm.resets == 12  # entrada e saída: conversa nunca sobrevive
 
 
-async def test_toque_duplo_no_cartao_abre_uma_vez(make_app, root):
+async def test_toque_duplo_no_cartao_abre_uma_vez(make_app):
     app = make_app()
     chat = chat_of(app)
     app.open_module(chat)
     app.open_module(chat)
-    await until(root, lambda: app.active is chat)
-    await settle(root)
+    await until(lambda: app.active is chat)
+    await pump(0.3)
     assert len(app.services.recorders) == 1
-    await app.leave_module()
+    assert depth(app) == 2
 
 
-async def test_encerrar_o_app_libera_o_modulo_e_os_servicos(make_app, root):
+async def test_encerrar_o_app_libera_o_modulo_e_os_servicos(make_app):
     app = make_app()
     chat = chat_of(app)
     await app.enter_module(chat)
-    await settle(root)
+    await pump(0.1)
     recorder = app.services.recorders[-1]
 
     await app.shutdown()
@@ -178,11 +235,10 @@ async def test_encerrar_o_app_libera_o_modulo_e_os_servicos(make_app, root):
 
     assert recorder.closed == 1
     assert app.services.closed == 1
-    assert app.active is None
-    assert root.winfo_exists()  # root dos testes não pertence ao app
+    assert app.active is None and app.window is None
 
 
-async def test_falha_ao_abrir_o_modulo_volta_ao_menu_com_aviso(make_app, root, monkeypatch):
+async def test_falha_ao_abrir_o_modulo_volta_ao_menu_com_aviso(make_app, monkeypatch):
     app = make_app()
     chat = chat_of(app)
 
@@ -191,150 +247,86 @@ async def test_falha_ao_abrir_o_modulo_volta_ao_menu_com_aviso(make_app, root, m
 
     monkeypatch.setattr(chat, "enter", quebra)
     assert await app.enter_module(chat) is False
-    pump(root)
+    await pump(0.1)
     assert app.active is None
-    assert app.menu.frame.winfo_ismapped()
-    assert "Não foi possível abrir" in app.menu.message
+    assert depth(app) == 1
+    assert "Não foi possível abrir" in label(find(app.window, "menuMessage"))
 
 
-# ---------- tela de conversa ----------
-
-
-def _inside(widget, root):
-    x, y = widget.winfo_rootx() - root.winfo_rootx(), widget.winfo_rooty() - root.winfo_rooty()
-    return (
-        widget.winfo_ismapped()
-        and x >= 0
-        and y >= 0
-        and x + widget.winfo_width() <= root.winfo_width()
-        and y + widget.winfo_height() <= root.winfo_height()
-    )
-
-
-async def test_layout_cabe_em_1024x600(make_app, root):
-    root.geometry("1024x600")
+async def test_slot_chamado_depois_da_saida_nao_faz_nada(make_app):
+    """A página ainda anima a saída lendo o controller: ele não pode agir mais."""
     app = make_app()
-    await settle(root, 0.1)
-    assert _inside(app.menu.cards["chat"], root)
-
-    chat = chat_of(app)
-    await app.enter_module(chat)
-    await settle(root, 0.1)
-    view = chat.view
-    controles = [
-        view.back_button,
-        view.voice_button,
-        view.new_button,
-        view.mic_button,
-        view.photo_button,
-        view.write_button,
-        view.send_button,
-        view.conversation,
-        view.prompt,
-        view.status_label,
-    ]
-    for widget in controles:
-        assert _inside(widget, root), widget
-    # alvos de toque confortáveis, qualquer que seja a fonte instalada
-    for widget in (
-        view.back_button,
-        view.new_button,
-        view.mic_button,
-        view.photo_button,
-        view.write_button,
-        view.send_button,
-    ):
-        assert widget.winfo_height() >= 44, widget
-    assert view.conversation.winfo_height() >= 200
+    example = example_of(app)
+    await app.enter_module(example)
+    controller = app.page
     await app.leave_module()
+    assert controller.check("28") is False
+    controller.back()  # não chama go_back de novo
+    await pump(0.1)
+    assert app.active is None
 
 
-async def test_fluxo_completo_pela_tela_texto_foto_e_resposta(make_app, root):
+# ---------- módulo de exemplo ----------
+
+
+async def test_modulo_de_exemplo_valida_calcula_e_volta(make_app):
     app = make_app()
-    chat = chat_of(app)
-    await app.enter_module(chat)
-    await settle(root)
-    view, session = chat.view, chat.session
-
-    view.write_button.invoke()
-    await settle(root)
-    (campo,) = view._draft_texts.values()
-    campo.insert("1.0", "que objeto é este?")  # sem evento de tecla (ex.: colar)
-    view.photo_button.invoke()
-    await until(root, lambda: session.activity is Activity.IDLE and len(session.draft) == 2)
-    await settle(root)
-
-    view.send_button.invoke()
-    await until(root, lambda: session.activity is Activity.IDLE and session.messages)
-    await settle(root)
-
-    (enviado,) = app.services.llm.sent
-    assert enviado[0] == "que objeto é este?"
-    assert enviado[1].mime_type == "image/jpeg"
-    _bubble, texto = view._message_widgets[session.messages[-1].id]
-    assert "Olá!" in texto.get("1.0", "end")
-    assert app.services.tts.spoken  # resposta falada
+    example = example_of(app)
+    await app.enter_module(example)  # aquecimento (ver acima)
+    await pump(0.3)
     await app.leave_module()
+    await pump(0.4)
+    itens_no_menu = len(screen_items(app.window))
+    assert await app.enter_module(example)
+    await pump(0.3)
+    window = app.window
+    field = find(window, "numberField")
+    assert field.hasActiveFocus()
+    hints = int(field.property("inputMethodHints").value)
+    assert hints & int(Qt.InputMethodHint.ImhDigitsOnly.value)  # teclado já no numérico
+
+    type_text(window, "abc")
+    click(window, find(window, "checkButton"))
+    await pump()
+    assert label(find(window, "verdict")) == "Entrada inválida"
+    assert "só algarismos" in label(find(window, "details"))
+    assert field.property("selectedText") == "abc"  # pronto para corrigir
+
+    click(window, find(window, "clearButton"))
+    await pump()
+    type_text(window, "28")
+    key(window, Qt.Key.Key_Return)  # Enter = Verificar
+    await pump()
+    assert label(find(window, "verdict")) == "28 não é primo: tem 6 divisores."
+    assert "28 = 2² × 7" in label(find(window, "details"))
+
+    click(window, find(window, "backButton"))
+    await until(lambda: app.active is None)
+    await pump(0.4)
+    assert example.controller is None
+    assert len(screen_items(window)) == itens_no_menu
+    assert app.services.recorders == []  # não abriu microfone
 
 
-async def test_segurar_para_falar_pela_tela(make_app, root):
-    app = make_app()
-    chat = chat_of(app)
-    await app.enter_module(chat)
-    await settle(root)
-    view, session = chat.view, chat.session
-    assert view.mic_button.cget("state") == "normal"
-
-    view.mic_button.event_generate("<ButtonPress-1>")
-    await settle(root)
-    assert session.activity is Activity.RECORDING
-    assert "Gravando" in view.status_label.cget("text")
-    view.mic_button.event_generate("<ButtonRelease-1>")
-    await until(root, lambda: session.activity is Activity.IDLE and session.draft)
-    await settle(root)
-
-    assert session.draft[0].text == "quanto é dois mais dois"
-    assert list(view._draft_texts.values())[0].get("1.0", "end-1c") == "quanto é dois mais dois"
-    await app.leave_module()
+# ---------- pré-carregamento do Whisper ----------
 
 
-async def test_erro_do_servico_aparece_e_a_tela_continua_usavel(make_app, root):
-    from api.llm_client import LLMError
+async def test_pre_carrega_a_voz_so_se_algum_modulo_usa(make_app):
+    app = make_app()  # chat + exemplo
+    app._preload_speech()
+    assert app.services.preloads == 1
+
+    app = make_app(modules=lambda s: [ExampleModule(s)])
+    app._preload_speech()
+    assert app.services.preloads == 0
 
     app = make_app()
-    chat = chat_of(app)
-    await app.enter_module(chat)
-    await settle(root)
-    app.services.llm.tokens = []
-    app.services.llm.error = LLMError("Sem conexão com o serviço de IA.")
-    view, session = chat.view, chat.session
-
-    await type_text(view, root, "oi")
-    view.send_button.invoke()
-    await until(root, lambda: session.activity is Activity.IDLE and session.messages)
-    await settle(root)
-
-    assert "Sem conexão" in view.status_label.cget("text")
-    _bubble, texto = view._message_widgets[session.messages[-1].id]
-    assert "Sem conexão" in texto.get("1.0", "end")
-    assert view.send_button.cget("state") == "normal"
-    assert session.draft  # rascunho de volta para tentar de novo
-    await app.leave_module()
+    app.services.settings = {"stt": {"preload": False}}
+    app._preload_speech()
+    assert app.services.preloads == 0
 
 
-async def test_nova_conversa_pela_tela_limpa_tudo(make_app, root):
+async def test_controller_exposto_a_qml_e_um_qobject(make_app):
     app = make_app()
-    chat = chat_of(app)
-    await app.enter_module(chat)
-    await settle(root)
-    view, session = chat.view, chat.session
-    await type_text(view, root, "oi")
-    view.send_button.invoke()
-    await until(root, lambda: session.activity is Activity.IDLE and session.messages)
-
-    view.new_button.invoke()
-    await until(root, lambda: not session.messages)
-    await settle(root)
-    assert list(view._message_widgets) == [0]  # só a mensagem de boas-vindas
-    assert "Conversa nova" in view.status_label.cget("text")
-    await app.leave_module()
+    await app.enter_module(chat_of(app))
+    assert isinstance(app.page, QObject)
