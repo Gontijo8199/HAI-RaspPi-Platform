@@ -2,7 +2,7 @@
 Imagem capturada pela câmera, pronta para anexar a um prompt do LLM.
 
 Módulo sem dependências (nem OpenCV): só bytes + metadados. Assim o cliente
-LLM e o pipeline podem tipar/receber imagens sem importar a camada de câmera.
+LLM e os módulos podem tipar/receber imagens sem importar a camada de câmera.
 """
 
 from __future__ import annotations

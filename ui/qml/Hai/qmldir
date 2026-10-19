@@ -1,0 +1,6 @@
+module Hai
+HaiButton 1.0 HaiButton.qml
+PageHeader 1.0 PageHeader.qml
+Toast 1.0 Toast.qml
+ConfirmDialog 1.0 ConfirmDialog.qml
+ModuleCard 1.0 ModuleCard.qml

@@ -42,10 +42,8 @@ jobs:
       - name: Dependências do sistema
         run: |
           sudo apt-get update
-          sudo apt-get install -y portaudio19-dev espeak-ng libespeak-ng-dev
-
-      - name: Instalar torch CPU
-        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+          sudo apt-get install -y portaudio19-dev espeak-ng libespeak-ng-dev \
+            libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3
 
       - name: Instalar dependências Python
         run: |
@@ -53,45 +51,14 @@ jobs:
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
 
-      - name: Criar configurações de teste
-        run: |
-          mkdir -p config
-
-          cat > config/secrets.toml << 'TOML'
-          [api]
-          key = "test-key"
-          TOML
-
-          cat > config/settings.toml << 'TOML'
-          [api]
-          model = "gemma-4-26b-a4b-it"
-
-          [stt]
-          language = "pt"
-          whisper_model = "tiny"
-          whisper_device = "cpu"
-          whisper_compute_type = "int8"
-
-          [vad]
-          threshold = 0.5
-          preroll_ms = 500
-          silence_ms = 700
-          interim_interval_ms = 1500
-
-          [tts]
-          backend = "espeak"
-          piper_bin = "/opt/piper/piper/piper"
-          piper_model = "/opt/piper/voices/pt_BR-faber-medium.onnx"
-          rate = 160
-          lang = "pt-br"
-          TOML
-
       - name: Verificar sintaxe
         run: python -m compileall .
 
       - name: Executar testes
         env:
           PYTHONPATH: .
+          # A interface (Qt Quick) desenha em memória: sem servidor gráfico.
+          QT_QPA_PLATFORM: offscreen
         run: pytest tests/ -v --tb=short
 
   docker:

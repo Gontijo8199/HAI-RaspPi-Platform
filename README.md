@@ -1,273 +1,213 @@
-# HAI — Human-AI Interaction Platform
+# HAI - Human-AI Interaction Platform
 
-Tutor virtual de apoio escolar embarcado: capta a voz do aluno, transcreve localmente com Whisper e consulta um LLM remoto, respondendo em voz natural via Piper TTS. Projetado para rodar em Raspberry Pi 5 sem depender de conexão contínua para o STT.
+Plataforma de atividades educacionais de inteligência artificial para um
+Raspberry Pi 5 com tela de toque de 1024 × 600. A aplicação abre um menu e
+cada atividade é um módulo independente.
 
-## Pipeline
+| Módulo | Padrão | O que faz | Documentação |
+|---|---|---|---|
+| **Conversar com a IA** | ativo | O aluno monta uma pergunta com texto, fala (Whisper local) e fotos da webcam; um LLM remoto responde em texto e em voz (Piper). | [modules/chat/README.md](modules/chat/README.md) |
+| **Módulo de exemplo** | desativado | Divisores e números primos de um número digitado. Não usa rede nem hardware; serve de modelo para novos módulos. | [modules/exemplo/README.md](modules/exemplo/README.md) |
 
-<pre>
-voz -> VAD (Silero) -> STT (Whisper) -> LLM API (streaming) -> TTS (Piper) -> speaker
-                                   ▲          └>  Display (Tkinter) -> Tela
-webcam -> foto (OpenCV, opcional) -──┘
-</pre>
+Para ativar ou desativar um módulo numa instalação, use `[modules]` no
+`config/settings.toml` (por exemplo, `exemplo = true`). O padrão de cada um
+fica em `REGISTRY`, em `modules/__init__.py`.
 
-Cada etapa é assíncrona e não-bloqueante:
-- O microfone continua ouvindo enquanto o Whisper transcreve.
-- O TTS começa a falar antes da resposta do LLM terminar (streaming).
-- Transcrição parcial é enviada ao LLM enquanto o aluno ainda fala (streaming STT).
-- A foto da webcam (mesma que capta o áudio) segue junto com a pergunta ao LLM.
+Mais documentação
 
-## Hardware
+- [docs/architecture.md](docs/architecture.md): inicialização, navegação, serviços compartilhados e ciclo de vida dos módulos.
+- [docs/development.md](docs/development.md): convenções, testes e como criar um módulo.
 
-- Raspberry Pi 5
-- Raspberry Pi OS Lite (64-bit)
-- Saída de áudio: HDMI ou jack 3.5mm
-- Webcam USB (microfone + câmera; fotos via OpenCV/V4L2)
+## Requisitos
 
-## Estrutura
+- Raspberry Pi 5 com Raspberry Pi OS 64-bit (Bookworm) e sessão gráfica. A
+  interface é Qt Quick (PySide6), Wayland nativo; também roda em X11.
+- Python 3.11 ou superior.
+- Tela de toque 1024 × 600 (outros tamanhos funcionam; o layout se ajusta).
+- Para o chat: internet e uma chave da API do Google GenAI, webcam USB (câmera
+  e microfone) e saída de áudio (HDMI ou P2).
 
-```
-├── stt/        captura de áudio, VAD e transcrição Whisper
-├── api/        cliente LLM com streaming assíncrono
-├── tts/        síntese de voz não-bloqueante (Piper, espeak, pyttsx3)
-├── vision/     captura de foto pela webcam (OpenCV) e tipo da imagem
-├── display/    driver do display físico
-├── core/       orquestração do pipeline (main + pipeline)
-└── config/     configurações e segredos
-```
+| Recurso | Depende de |
+|---|---|
+| Interface | sessão gráfica (`$WAYLAND_DISPLAY` ou `$DISPLAY`) e PySide6 (pip) |
+| Respostas da IA | internet e `[api] key` em `config/secrets.toml` |
+| Entrada por voz | microfone; o modelo Whisper é baixado na primeira vez e depois funciona offline |
+| Fotos | webcam em `[camera] device` |
+| Resposta em voz | saída de áudio e Piper (ou espeak-ng) |
+
+Sem chave da API, o chat aparece como indisponível no menu e o resto da
+aplicação funciona.
 
 ## Instalação
 
-### 1. Dependências do sistema
-
 ```bash
-+sudo apt install -y portaudio19-dev libsndfile1 espeak-ng libespeak-ng-dev python3-tk
-```
+# Pacotes do sistema
+sudo apt install -y portaudio19-dev libsndfile1 espeak-ng alsa-utils
 
-Opcional, para diagnosticar a câmera: `sudo apt install v4l-utils` (`v4l2-ctl --list-devices`).
-
-### 2. Piper TTS
-
-```bash
+# Piper (voz) - Raspberry Pi 5 / arm64
 mkdir -p ~/piper/voices && cd ~/piper
-
-# Raspberry Pi 5 (arm64)
 wget https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_aarch64.tar.gz
 tar -xzf piper_linux_aarch64.tar.gz
-
-# Voz pt-BR
 wget -P voices https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_BR/faber/medium/pt_BR-faber-medium.onnx
 wget -P voices https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_BR/faber/medium/pt_BR-faber-medium.onnx.json
+cd -
+
+# Python
+python3 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt   # inclui PySide6 (Qt Quick e o teclado da tela) e qasync
 ```
 
-### 3. Python
+O PySide6 do pip traz o Qt inteiro, com o teclado da tela (Qt Virtual
+Keyboard, layout pt-BR). Ainda não foi testado no Pi 5; se o wheel aarch64
+der problema, o Pi OS tem os pacotes `python3-pyside6.*` e
+`qml6-module-qtquick-virtualkeyboard` no apt (crie a venv com
+`--system-site-packages`).
 
-```bash
-# Torch CPU (importante: antes do pip install -r)
-pip install torch --index-url https://download.pytorch.org/whl/cpu
-
-pip install -r requirements.txt
-```
-
-### 4. Configuração
+## Configuração
 
 ```bash
 cp config/settings.example.toml config/settings.toml
-# Edite settings.toml com os caminhos do Piper e preferências
 
-# Crie secrets.toml com sua chave de API (nunca versionar)
 cat > config/secrets.toml << 'TOML'
 [api]
 key = "SUA_CHAVE_AQUI"
 TOML
 ```
 
-### 5. Áudio via HDMI
+Os dois arquivos estão no `.gitignore`; não versione a chave.
+`config/settings.example.toml` documenta cada opção:
+
+| Seção | Chaves principais |
+|---|---|
+| `[api]` | `model`, `timeout_s` (espera máxima por trecho da resposta; padrão 30 s) |
+| `[stt]` | `language`, `whisper_model` (tiny, base, small…), `whisper_device`, `whisper_compute_type`, `preload` |
+| `[tts]` | `backend` (piper, espeak, pyttsx3), `piper_bin`, `piper_model`, `rate`, `lang` |
+| `[display]` | `fullscreen`, `width`, `height`, `on_screen_keyboard`, `open_single_module` |
+| `[modules]` | `<id> = true/false` para ativar ou desativar módulos (ex.: `exemplo = true`) |
+| `[camera]` | `enabled`, `device`, `width`, `height`, `max_side`, `jpeg_quality`, `warmup_frames`, `save_dir` |
+
+Seções de versões anteriores (`[vad]`, `[ux]`, `display.font_size` etc.) são
+ignoradas e podem ser apagadas.
+
+Áudio pelo HDMI, se necessário:
 
 ```bash
-# Define HDMI como saída padrão do ALSA
-echo 'defaults.pcm.card 0
-defaults.ctl.card 0' > ~/.asoundrc
-
-# Verifica saídas disponíveis
-aplay -l
+printf 'defaults.pcm.card 0\ndefaults.ctl.card 0\n' > ~/.asoundrc
+aplay -l    # saídas
+arecord -l  # entradas
 ```
 
-## Uso
+## Execução
 
 ```bash
-# Detecção automática de voz (VAD)
-python core/main.py
-
-# Push-to-Talk via Enter
-python core/main.py --ptt
-
-# Sem TTS (só texto no terminal — útil para desenvolvimento)
-python core/main.py --no-tts
-
-# Forçar backend de TTS
-python core/main.py --tts-backend espeak
-
-# Manter o mic capturando enquanto o tutor responde (barge-in por voz)
-python core/main.py --allow-barge-in
+python core/main.py                      # tela cheia
+python core/main.py --windowed           # em janela (desenvolvimento)
+python core/main.py --no-tts             # respostas só em texto
+python core/main.py --tts-backend espeak # força o backend de voz
 ```
 
-## Fotos (webcam → LLM)
+F11 alterna a tela cheia; fechar a janela, Ctrl+C ou SIGTERM encerram a
+aplicação liberando microfone, áudio e conexões. Sem sessão gráfica, o
+programa termina com código 1 e explica o que falta. Com
+`[display] open_single_module = true` e um só módulo ativo, ele abre direto.
 
-A mesma webcam que capta a voz tira fotos que seguem **junto com a próxima
-pergunta** ao LLM (multimodal). Duas formas de tirar a foto:
+**Entrada de texto.** Tocar num campo de texto abre o teclado da tela
+(Qt Virtual Keyboard em português: segure uma vogal para os acentos). A tela
+encolhe para o teclado não cobrir o editor; com ele aberto, o chat mostra
+uma prévia do fim da conversa e **▴ Ver tudo**, que fecha o teclado. Quem usa
+teclado físico pode desligar o da tela no menu ⋯ do chat (**Teclado na
+tela**). Com `[display] on_screen_keyboard = false` ele nem é carregado.
 
-- **Tecla de foto** (`f` por padrão, `[ux] photo_key`): captura na hora e deixa a
-  foto pendente; a próxima pergunta já vai com ela.
-- **Voz**: dizer `"tira uma foto"` ou `"olha isso"` na própria pergunta, por exemplo
-  *"olha isso, que planta é essa?"*. Se disser só o gatilho (*"tira uma foto"*), o tutor
-  tira a foto, avisa por voz e espera a pergunta.
+| Teclado físico (chat) | Ação |
+|---|---|
+| Ctrl+Enter | envia |
+| Enter | quebra a linha |
+| Esc | cancela a resposta, a gravação, a foto ou a leitura em andamento |
+| Tab / Espaço | percorre e aciona os botões principais (anel de foco azul) |
+| F11 | alterna a tela cheia |
 
-A foto só é consumida quando a resposta chega (cancelar ou erro de API mantêm a foto),
-expira em `photo_ttl_s` segundos e pode ser descartada com a tecla de cancelamento
-quando não há nada em andamento. A imagem é reduzida (lado maior `max_side`) e enviada
-em JPEG; o flash-card do tópico também recebe a foto. Nada é gravado em disco, a menos
-que `[camera] save_dir` seja preenchido.
+O motivo de não usar o teclado virtual do sistema está em
+[docs/architecture.md](docs/architecture.md#teclado-na-tela).
+
+**Diagnóstico da câmera:**
 
 ```bash
 python -m vision.camera --list              # índices de câmera que entregam frames
-python -m vision.camera --device 0 -o t.jpg # foto de teste, sem o resto do pipeline
+python -m vision.camera --device 0 -o t.jpg # foto de teste, sem a interface
 ```
 
-> A foto continua no histórico da sessão (o LLM pode se referir a ela depois) e é
-> reenviada a cada turno: dizer **"resetar"** limpa o histórico e alivia o payload.
+### Iniciar com o sistema (quiosque)
 
-## Controles
+No Pi OS Bookworm com labwc, acrescente ao `~/.config/labwc/autostart`:
 
-| Tecla | Ação |
-|---|---|
-| **Espaço** | Cancela o pedido em andamento: interrompe o stream do LLM, corta a fala do TTS na hora e devolve o mic |
-| **Enter** (PTT) | Começa/encerra a gravação; durante a resposta é ignorado (mic mutado) |
-| **Espaço** (PTT, gravando) | Descarta o áudio gravado sem enviar |
-| **F** (foto) | Tira uma foto para a próxima pergunta (se `[camera]` estiver ativa; configurável em `[ux] photo_key`) |
-| **Espaço** (sem nada em andamento) | Descarta a foto pendente |
-| **Ctrl+C** | Encerra o programa (restaura o terminal) |
+```bash
+/home/pi/HAI-RaspPi-Module/venv/bin/python /home/pi/HAI-RaspPi-Module/core/main.py &
+```
 
-> A tecla de cancelamento é configurável em `[ux] cancel_key` (`space`,
-> `esc`, `enter`, `tab`, `backspace`, `ctrl+c` ou uma letra). O padrão é
-> **Espaço** porque o display Tk usa **Esc** para sair da tela cheia.
-
+Ajuste os caminhos à instalação. Com o Wayfire (versões anteriores do
+Bookworm), use a seção `[autostart]` do `~/.config/wayfire.ini`.
 
 ## Docker
 
+A imagem roda a interface gráfica usando a sessão gráfica, o áudio e a
+webcam do hospedeiro:
+
 ```bash
-# Build local (arquitetura do host)
 docker build -t hai .
 
-# Run (monta config com secrets)
-docker run -it --rm \
-  --device /dev/snd \
-  --device /dev/video0 \
-  -v $(pwd)/config:/app/config \
+docker run --rm \
+  -e WAYLAND_DISPLAY=$WAYLAND_DISPLAY -e XDG_RUNTIME_DIR=/tmp/xdg \
+  -v $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY:/tmp/xdg/$WAYLAND_DISPLAY \
+  --device /dev/dri --device /dev/snd --device /dev/video0 \
+  -v "$PWD/config:/app/config:ro" \
   hai
 
-# Build multi-arch (amd64 + arm64) via Buildx
 docker buildx build --platform linux/amd64,linux/arm64 -t hai .
 ```
 
-## Display (janela X11 no HDMI)
-
-O `display/` renderiza a resposta do tutor em Markdown numa janela X11,
-mais um **flash-card** com o resumo do tópico da pergunta atual, gerado
-pela LLM a cada utterance:
-
-<pre>
-┌──────────────────────────────────────┬──────────────────┐
-│                                      │ Resumo do        │
-│  ## Resposta em Markdown do tutor    │    tópico        │
-│  negrito, itálico, código,           │                  |
-│  listas, blocos de código etc.       │ ## Fotossíntese  │
-│                                      │ Resumo: ...      │
-│                                      │ - ponto 1        │
-│                                      │ - ponto 2        │
-└──────────────────────────────────────┴──────────────────┘
-</pre>
-Se não houver `tkinter` disponível ou nenhum servidor X (`$DISPLAY`), o
-driver cai automaticamente em modo headless: o pipeline continua
-funcionando normalmente (texto no terminal + áudio), só sem a janela.
-
-Configuração em `config/settings.toml`:
-
-```toml
-[display]
-enabled = true
-fullscreen = true 
-width = 1024 
-height = 600
-font_size = 20
-flashcard_width = 340 
-```
-
-
-## Configuração (`config/settings.toml`)
-
-```toml
-[api]
-model = "gemma-4-26b-a4b-it"
-
-[stt]
-language = "pt"
-whisper_model = "small"       # tiny | small | medium
-whisper_device = "cpu"
-whisper_compute_type = "int8" # sempre int8 na CPU
-
-[vad]
-threshold = 0.5
-preroll_ms = 500
-silence_ms = 700
-interim_interval_ms = 1500    # 0 = desativa streaming parcial
-
-[tts]
-backend = "piper"             # piper | espeak | pyttsx3
-piper_bin   = "/home/rafa/piper/piper/piper"
-piper_model = "/home/rafa/piper/voices/pt_BR-faber-medium.onnx"
-rate = 160
-lang = "pt-br"
-
-[display]
-enabled = true
-fullscreen = true 
-width = 1024 
-height = 600
-font_size = 20
-flashcard_width = 340 
-
-[camera]
-enabled = true
-device = 0                    # índice V4L2 ou "/dev/video0" — a mesma webcam do microfone
-width = 1280
-height = 720
-max_side = 1024               # lado maior (px) da foto enviada ao LLM
-jpeg_quality = 85
-warmup_frames = 8             # estabiliza exposição/branco antes do frame final
-photo_ttl_s = 120             # foto pendente expira sem pergunta
-save_dir = ""                 # vazio = não grava fotos em disco
-
-[ux]
-mute_while_responding = true  # false = mic continua aberto durante a resposta (barge-in)
-cancel_key = "space"          # tecla de cancelamento (Esc é usado pelo display p/ tela cheia)
-photo_key = "f"               # tecla de foto (vazio = só gatilho de voz)
-```
+`config/` é montada em tempo de execução (o build não copia `settings.toml`
+nem `secrets.toml`). A imagem define `PIPER_BIN` e `PIPER_MODEL`, usados quando
+o `settings.toml` não informa os caminhos do Piper. Se o hospedeiro usar
+PipeWire ou PulseAudio, o acesso direto a `/dev/snd` pode estar ocupado; nesse
+caso, repasse o socket do servidor de áudio.
 
 ## Testes
 
 ```bash
 pip install -r requirements-dev.txt
-pytest tests/ -v
+pytest                     # interface incluída: o Qt desenha em memória (offscreen), sem X
+ruff check . && ruff format --check .
 ```
 
-## Targets de latência
+Os testes não usam microfone, câmera, rede nem chave da API. Detalhes em
+[docs/development.md](docs/development.md#testes).
 
-| Etapa | Target |
-|---|---|
-| STT (whisper small int8) | < 2s |
-| Início da resposta falada | < 1s após transcrição |
-| Ciclo completo | < 3–5s |
+## Privacidade
 
-## Palavras-chave de controle
+- Conversas, transcrições e fotos ficam só na memória e são apagadas ao sair
+  do chat ou tocar em **Nova conversa**.
+- O microfone só captura enquanto o botão de falar está pressionado.
+- Os logs não contêm perguntas, transcrições, respostas nem imagens.
+- Não há telemetria; o único envio externo é a requisição ao LLM configurado.
+- `[camera] save_dir` grava fotos em disco para depuração; vazio por padrão.
 
-Dizer **"resetar"** ou **"nova sessão"** durante a conversa apaga o histórico e reinicia a sessão com o LLM.
+## Limitações conhecidas
+
+- **Latência do LLM:** o modelo padrão (`gemma-4-26b-a4b-it`) levou de 16 a 43 s
+  por resposta nos testes com a API real. Acima de `[api] timeout_s` a tela mostra
+  erro e a pergunta volta ao rascunho; use 60 ou mais se isso for frequente.
+- **Primeira execução:** o Whisper é baixado da internet. Até terminar, o
+  botão de voz mostra "Preparando a voz…"; texto e foto funcionam.
+- **Fotos só da webcam:** não há como anexar arquivos.
+- **Validação no Pi:** a interface foi testada num PC (GNOME, Wayland e
+  XWayland) e nos testes automáticos (offscreen). Ainda falta validar no Pi
+  real: o PySide6 do pip no aarch64, a tela de toque e o teclado da tela no
+  labwc, o áudio e o tempo de transcrição.
+- **Teclado físico com o da tela ligado:** as teclas mortas (´ + a → á) ainda
+  não foram conferidas. Se falharem, use `[display] on_screen_keyboard = false`.
+
+## Licenças
+
+O código do projeto é MIT (`LICENSE`). A interface usa o Qt (LGPLv3) e o
+**Qt Virtual Keyboard, que é GPLv3**: distribuir a aplicação junto com o
+teclado (uma imagem do Pi, por exemplo) segue a GPLv3 no conjunto.

@@ -1,15 +1,53 @@
 import asyncio
+import contextlib
 import logging
 import threading
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
+import httpx
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types
 
 from vision.image import CapturedImage
 
 logger = logging.getLogger(__name__)
+
+# Uma mensagem composta na interface: textos e fotos na ordem em que o aluno montou.
+MessagePart = str | CapturedImage
+
+
+class LLMError(RuntimeError):
+    """Falha ao consultar o LLM. A mensagem já é legível para o aluno/professor."""
+
+
+def describe_error(exc: BaseException) -> str:
+    """Traduz falhas de rede/API em uma frase compreensível (sem dados da conversa)."""
+    if isinstance(exc, LLMError):
+        return str(exc)
+    if isinstance(exc, genai_errors.APIError):
+        code = exc.code or 0
+        texto = str(exc).lower()
+        if code in (401, 403) or "api key" in texto or "api_key" in texto:
+            return "A chave da API foi recusada. Confira config/secrets.toml."
+        if code == 429:
+            return "Limite de uso da IA atingido. Espere um pouco e tente de novo."
+        if code >= 500:
+            return "O serviço de IA está com problemas agora. Tente de novo daqui a pouco."
+        return f"A IA recusou o pedido (erro {code}). Tente reformular a mensagem."
+    if isinstance(exc, (TimeoutError, httpx.TimeoutException)):
+        return "A IA demorou demais para responder. Tente de novo."
+    if isinstance(exc, (httpx.TransportError, OSError)):
+        return "Sem conexão com o serviço de IA. Verifique a internet e tente de novo."
+    return "Não consegui falar com a IA. Tente de novo."
+
+
+class _StreamFailure:
+    """Marcador enfileirado pela thread de rede quando o stream falha."""
+
+    def __init__(self, exc: BaseException):
+        self.exc = exc
 
 
 def _log_executor_error(task: Any) -> None:
@@ -26,22 +64,29 @@ def _nota_de_foto(images: Sequence[CapturedImage]) -> str:
     return f"(O aluno anexou {len(images)} fotos tiradas agora pela câmera do tablet.)"
 
 
-def _montar_conteudo(mensagem: str, images: Sequence[CapturedImage] | None) -> str | list[Any]:
-    """Texto puro quando não há imagem; senão [imagens..., texto] (imagem antes do texto)."""
-    if not images:
-        return mensagem
-    partes: list[Any] = [
-        types.Part.from_bytes(data=img.data, mime_type=img.mime_type) for img in images
+def _montar_partes(partes: Sequence[MessagePart]) -> list[Any]:
+    """Mensagem composta (texto e fotos intercalados), preservando a ordem do aluno."""
+    imagens = [p for p in partes if isinstance(p, CapturedImage)]
+    conteudo: list[Any] = [
+        "Mensagem do aluno (digitada ou transcrita da voz; as fotos aparecem na "
+        "ordem em que foram anexadas, entre os trechos de texto):"
     ]
-    partes.append(f"{mensagem}\n{_nota_de_foto(images)}")
-    return partes
+    for parte in partes:
+        if isinstance(parte, CapturedImage):
+            conteudo.append(types.Part.from_bytes(data=parte.data, mime_type=parte.mime_type))
+        elif parte.strip():
+            conteudo.append(parte.strip())
+    if imagens:
+        conteudo.append(_nota_de_foto(imagens))
+    return conteudo
 
 
 class LLMClient:
     SYSTEM_PROMPT = """\
         Você é um tutor virtual de apoio escolar para alunos do Ensino Fundamental II (6º ao 9º ano).
 
-        Você receberá transcrições automáticas de voz geradas pelo Whisper, que podem conter
+        O aluno monta cada mensagem com trechos digitados, trechos falados e fotos, na ordem
+        que preferir. Os trechos falados são transcrições automáticas (Whisper) e podem conter
         erros de reconhecimento, palavras incompletas, repetições, hesitações ou pontuação incorreta.
 
         Diretrizes de interpretação:
@@ -75,30 +120,6 @@ class LLMClient:
           pessoas na foto, concentre-se só no conteúdo escolar da pergunta.
     """
 
-    FLASHCARD_SYSTEM_PROMPT = """\
-        Você gera flash-cards de resumo para um tutor virtual escolar.
-
-        Dada a transcrição de uma pergunta de um aluno do Ensino Fundamental II,
-        produza um flash-card curto em Markdown identificando o tópico/matéria
-        sendo discutido. Formato obrigatório:
-
-        ## <Título curto do tópico, 2 a 5 palavras>
-        **Resumo:** <uma frase objetiva sobre o que está sendo discutido>
-        - <ponto-chave 1, até 8 palavras>
-        - <ponto-chave 2, até 8 palavras>
-
-        Regras:
-        - Responda somente com o Markdown acima, sem texto antes ou depois.
-        - Português brasileiro, direto, sem jargão técnico.
-        - No máximo 3 bullets.
-        - Se houver uma foto anexada, use-a para identificar o tópico (ex.: o exercício ou o
-          objeto mostrado), sem identificar pessoas pelo rosto.
-        - Se a pergunta for incompreensível, use "## Pergunta não identificada"
-          como título e um resumo genérico.
-    """
-
-    # TODO: Exportar prompts para arquivos externos
-
     def __init__(
         self,
         api_key: str,
@@ -110,49 +131,57 @@ class LLMClient:
         self._client = genai.Client(api_key=api_key)
         self._chat = self._nova_sessao()
         # Evento da stream em andamento — usado por cancel_stream() para
-        # interromper a thread de rede imediatamente (tecla Esc).
+        # interromper a thread de rede imediatamente (botão Parar, saída do módulo).
         self._cancel_event: threading.Event | None = None
 
-    async def send_stream(
-        self, transcription: str, images: Sequence[CapturedImage] | None = None
-    ) -> AsyncIterator[str]:
-        mensagem = f'Transcrição do aluno:\n"""\n{transcription}\n"""'
-        conteudo = _montar_conteudo(mensagem, images)
+    async def send_parts_stream(self, partes: Sequence[MessagePart]) -> AsyncIterator[str]:
+        """Envia uma mensagem composta (textos e fotos na ordem) numa única requisição."""
+        async with contextlib.aclosing(self._stream(_montar_partes(partes))) as stream:
+            async for token in stream:
+                yield token
 
-        queue: asyncio.Queue[str | None] = asyncio.Queue()
+    async def _stream(self, conteudo: list[Any]) -> AsyncIterator[str]:
+        """Stream de tokens da sessão atual. Falhas viram LLMError (mensagem legível)."""
+        queue: asyncio.Queue[str | _StreamFailure | None] = asyncio.Queue()
         loop = asyncio.get_running_loop()
         cancelled = threading.Event()
         self._cancel_event = cancelled
+        chat = self._chat
 
         def _run_stream() -> None:
             try:
-                for chunk in self._chat.send_message_stream(conteudo):
+                for chunk in chat.send_message_stream(conteudo):
                     if cancelled.is_set():
                         break
                     text = chunk.text or ""
                     if text:
                         loop.call_soon_threadsafe(queue.put_nowait, text)
             except Exception as exc:
-                logger.error("Erro no stream LLM: %s", exc)
+                # Só o tipo do erro: a mensagem pode ecoar parte do pedido.
+                logger.error("Erro no stream LLM: %s", type(exc).__name__)
+                if not cancelled.is_set():
+                    loop.call_soon_threadsafe(queue.put_nowait, _StreamFailure(exc))
             finally:
                 if not cancelled.is_set():
                     loop.call_soon_threadsafe(queue.put_nowait, None)
 
-        executor_task = asyncio.get_running_loop().run_in_executor(None, _run_stream)
+        executor_task = loop.run_in_executor(None, _run_stream)
 
         try:
             while True:
                 try:
                     token = await asyncio.wait_for(queue.get(), timeout=self.timeout)
-                except TimeoutError:
+                except TimeoutError as exc:
                     logger.warning("Timeout aguardando token do LLM.")
-                    break
+                    raise LLMError(describe_error(exc)) from exc
                 if token is None:
                     break
+                if isinstance(token, _StreamFailure):
+                    raise LLMError(describe_error(token.exc)) from token.exc
                 yield token
         finally:
             # Cobre tanto o fim natural quanto o fechamento do gerador
-            # (task cancelada via Esc): sinaliza a thread de rede parar.
+            # (task cancelada): sinaliza a thread de rede parar.
             cancelled.set()
             if self._cancel_event is cancelled:
                 self._cancel_event = None
@@ -168,35 +197,6 @@ class LLMClient:
         if self._cancel_event is not None:
             self._cancel_event.set()
             logger.info("Stream LLM cancelado.")
-
-    async def send(self, transcription: str, images: Sequence[CapturedImage] | None = None) -> str:
-        tokens: list[str] = []
-        async for token in self.send_stream(transcription, images):
-            tokens.append(token)
-        return "".join(tokens).strip()
-
-    async def generate_flashcard(
-        self, transcription: str, images: Sequence[CapturedImage] | None = None
-    ) -> str:
-        mensagem = f'Pergunta do aluno:\n"""\n{transcription}\n"""'
-        conteudo = _montar_conteudo(mensagem, images)
-        loop = asyncio.get_running_loop()
-
-        def _call() -> str:
-            response = self._client.models.generate_content(
-                model=self.model,
-                contents=conteudo,
-                config=types.GenerateContentConfig(
-                    system_instruction=self.FLASHCARD_SYSTEM_PROMPT,
-                ),
-            )
-            return (response.text or "").strip()
-
-        try:
-            return await asyncio.wait_for(loop.run_in_executor(None, _call), timeout=self.timeout)
-        except Exception as exc:
-            logger.error("Erro ao gerar flashcard: %s", exc)
-            return ""
 
     def resetar_sessao(self) -> None:
         self._chat = self._nova_sessao()

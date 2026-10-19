@@ -1,17 +1,17 @@
 """
-Captura de foto pela webcam — a mesma usada como microfone (UVC + UAC são
+Captura de foto pela webcam - a mesma usada como microfone (UVC + UAC são
 interfaces USB independentes, então abrir o vídeo não atrapalha o PyAudio).
 
-Design (mesmo padrão de stt/audio_stream.py e tts/speaker.py):
+Design:
 - A câmera é aberta SOB DEMANDA: abre, descarta alguns frames (auto-exposição e
   balanço de branco precisam estabilizar), captura 1 frame e fecha. Não mantém
-  o dispositivo aberto — poupa CPU/USB no Pi e evita conflito com outros apps.
+  o dispositivo aberto - poupa CPU/USB no Pi e evita conflito com outros apps.
 - capture() é async e roda o OpenCV em asyncio.to_thread: nunca bloqueia o loop.
-- Um lock serializa capturas concorrentes (ex.: hotkey apertada duas vezes).
+- Um lock serializa capturas concorrentes (ex.: botão Foto tocado duas vezes).
 - O frame é reduzido (lado maior = max_side) e comprimido em JPEG antes de sair:
   menos banda e menos tokens de imagem no LLM.
 - cv2 é importado tardiamente: sem OpenCV o resto do programa continua de pé e
-  só a captura falha (com CameraError, que o pipeline trata).
+  só a captura falha (com CameraError, que o módulo mostra como aviso).
 - Falhas viram CameraError; nada aqui lança exceção "crua" do OpenCV.
 
 Diagnóstico (a partir da raiz do projeto)::

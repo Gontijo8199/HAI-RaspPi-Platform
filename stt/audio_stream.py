@@ -1,6 +1,5 @@
 import asyncio
 import logging
-from collections import deque
 
 import pyaudio
 
@@ -8,20 +7,17 @@ logger = logging.getLogger(__name__)
 
 
 class MicrophoneStream:
-    """Stream de microfone que alimenta uma asyncio.Queue com chunks PCM.
+    """Stream de microfone que alimenta uma asyncio.Queue com chunks PCM-16 mono.
 
-    O callback do PyAudio roda em uma thread C separada e usa call_soon_threadsafe para nunca bloquear o event loop.
-
-    Um buffer circular de pre-roll é mantido continuamente para que o início da fala não seja cortado quando o VAD detecta o onset.
+    O callback do PyAudio roda numa thread C do PortAudio e usa
+    call_soon_threadsafe para entregar os chunks sem bloquear o event loop.
 
     Parâmetros
     ----------
     sample_rate : int
-        Taxa de amostragem em Hz. Deve ser 16000 (exigência do Silero VAD).
+        Taxa de amostragem em Hz (16000 é o que o Whisper espera).
     chunk_samples : int
-        Amostras por chunk entregue à fila. Deve ser 512 (exigência do Silero VAD).
-    preroll_ms : int
-        Janela do buffer circular em milissegundos.
+        Amostras por chunk entregue à fila.
     device_index : int | None
         Índice do dispositivo PyAudio. None usa o padrão do sistema.
     """
@@ -33,16 +29,11 @@ class MicrophoneStream:
         self,
         sample_rate: int = 16000,
         chunk_samples: int = 512,
-        preroll_ms: int = 500,
         device_index: int | None = None,
     ):
         self.sample_rate = sample_rate
         self.chunk_samples = chunk_samples
         self.device_index = device_index
-
-        chunk_ms = (chunk_samples / sample_rate) * 1000
-        preroll_chunks = max(1, int(preroll_ms / chunk_ms))
-        self._preroll: deque[bytes] = deque(maxlen=preroll_chunks)
 
         self._audio = pyaudio.PyAudio()
         self._stream: pyaudio.Stream | None = None
@@ -64,7 +55,7 @@ class MicrophoneStream:
         )
         self._stream.start_stream()
         logger.info(
-            "Microfone aberto — %d Hz, chunk=%d amostras (%.0f ms)",
+            "Microfone aberto - %d Hz, chunk=%d amostras (%.0f ms)",
             self.sample_rate,
             self.chunk_samples,
             self.chunk_samples / self.sample_rate * 1000,
@@ -78,10 +69,10 @@ class MicrophoneStream:
         self._audio.terminate()
 
     def pause(self) -> None:
-        """Interrompe a captura no nível do PortAudio (callback para de rodar).
+        """Interrompe a captura no nível do PortAudio (o callback para de rodar).
 
-        Nenhum chunk novo chega à fila e o pre-roll é descartado, então nada
-        do que for dito durante a pausa é capturado ou retido. Idempotente.
+        Nenhum chunk novo chega à fila e os pendentes são descartados, então
+        nada do que for dito durante a pausa é capturado ou retido. Idempotente.
         """
         self._running = False
         if self._stream is not None:
@@ -89,13 +80,11 @@ class MicrophoneStream:
                 self._stream.stop_stream()
             except Exception as exc:
                 logger.warning("Erro ao pausar stream: %s", exc)
-        self.clear_preroll()
         self.drain_queue()
         logger.debug("Microfone pausado.")
 
     def resume(self) -> None:
-        """Retoma a captura com buffers limpos (sem áudio residual da pausa)."""
-        self.clear_preroll()
+        """Retoma a captura com a fila limpa (sem áudio residual da pausa)."""
         self.drain_queue()
         self._running = True
         if self._stream is not None:
@@ -115,12 +104,6 @@ class MicrophoneStream:
             except asyncio.QueueEmpty:
                 break
 
-    def get_preroll(self) -> bytes:
-        return b"".join(self._preroll)
-
-    def clear_preroll(self) -> None:
-        self._preroll.clear()
-
     def _callback(
         self,
         in_data: bytes,
@@ -129,6 +112,5 @@ class MicrophoneStream:
         status_flags: int,
     ):
         if self._running and self._loop is not None:
-            self._preroll.append(in_data)
             self._loop.call_soon_threadsafe(self._queue.put_nowait, in_data)
         return (None, pyaudio.paContinue)
