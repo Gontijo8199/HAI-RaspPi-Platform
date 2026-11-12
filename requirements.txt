@@ -27,7 +27,8 @@ opencv-python-headless>=4.8.0
 onnxruntime>=1.14
 
 # LLM
-google-genai>=1.0.0
+# <3: a 3.x trocou o httpx (importado em api/llm_client.py) pelo httpx2 e nunca foi testada.
+google-genai>=1.0.0,<3
 
 # TTS
 pyttsx3>=2.90
