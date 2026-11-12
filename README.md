@@ -43,6 +43,10 @@ aplicação funciona.
 
 ## Instalação
 
+No Pi, `./install.sh` faz todos os passos abaixo e cria `config/settings.toml`
+e `config/secrets.toml` se faltarem (depois, coloque a chave em `secrets.toml`).
+Para instalar à mão:
+
 ```bash
 # Pacotes do sistema
 sudo apt install -y portaudio19-dev libsndfile1 espeak-ng alsa-utils
