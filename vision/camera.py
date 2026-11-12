@@ -148,6 +148,10 @@ class CameraCapture:
             logger.warning("Câmera indisponível: %s", exc)
             return False
 
+    def live(self, max_side: int = 640) -> LiveCamera:
+        """Prévia ao vivo com esta câmera (aberta só entre open() e close())."""
+        return LiveCamera(self, max_side)
+
     # Interno
 
     def _capture_sync(self) -> CapturedImage:
@@ -193,6 +197,59 @@ class CameraCapture:
         except OSError as exc:
             logger.warning("Não foi possível gravar a foto em disco: %s", exc)
             return None
+
+
+class LiveCamera:
+    """Câmera aberta continuamente, para prévia ao vivo: frame() entrega o quadro
+    mais recente já em JPEG (lado maior = max_side).
+
+    Exceção ao "abre sob demanda" de CameraCapture: só quem mostra prévia usa,
+    e sempre fecha (close() é seguro mesmo se open() falhou). Enquanto aberta,
+    capture() da mesma câmera falha (dispositivo ocupado): tire a foto daqui.
+    """
+
+    def __init__(self, camera: CameraCapture, max_side: int = 640):
+        self._camera = camera
+        self._max_side = max_side
+        self._cap: Any = None
+        self._lock = threading.Lock()  # read e release nunca ao mesmo tempo
+
+    async def open(self) -> None:
+        await asyncio.to_thread(self._open_sync)
+
+    async def frame(self) -> CapturedImage:
+        return await asyncio.to_thread(self._frame_sync)
+
+    async def close(self) -> None:
+        await asyncio.to_thread(self._close_sync)
+
+    def _open_sync(self) -> None:
+        cam = self._camera
+        with self._lock:
+            cap = _open_capture(cam._device, cam._width, cam._height)
+            if not cap.isOpened():
+                cap.release()
+                raise CameraError(
+                    f"Não consegui abrir a câmera {cam._device!r}. "
+                    "Ela está conectada e livre (nenhum outro app usando)?"
+                )
+            self._cap = cap
+
+    def _frame_sync(self) -> CapturedImage:
+        with self._lock:
+            if self._cap is None:
+                raise CameraError("A câmera foi fechada.")
+            ok, frame = self._cap.read()
+        if not ok or frame is None:
+            raise CameraError("A câmera parou de entregar imagens.")
+        data, width, height = _encode_jpeg(frame, self._max_side, self._camera._jpeg_quality)
+        return CapturedImage(data=data, width=width, height=height)
+
+    def _close_sync(self) -> None:
+        with self._lock:
+            if self._cap is not None:
+                self._cap.release()
+                self._cap = None
 
 
 def _list_devices(max_index: int = 10) -> None:

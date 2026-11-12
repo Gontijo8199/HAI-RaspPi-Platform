@@ -31,13 +31,20 @@ async def until(predicate, timeout=5.0):
         await asyncio.sleep(0.005)
 
 
+def children(item):
+    """Filhos visuais. Num Pi lento a árvore é lida enquanto o Qt ainda destrói
+    itens (popups do teclado); o PySide devolve esses meio-destruídos com outro
+    tipo (QMetaObject), então ficam de fora."""
+    return [c for c in item.childItems() if isinstance(c, QQuickItem)]
+
+
 def items(window):
     """Todos os itens visuais da janela (inclusive popups abertos), em ordem."""
     out = []
 
     def walk(item: QQuickItem):
         out.append(item)
-        for child in item.childItems():
+        for child in children(item):
             walk(child)
 
     walk(window.contentItem())
@@ -54,7 +61,7 @@ def screen_items(window):
         while stack:
             item = stack.pop()
             skip.add(id(item))
-            stack.extend(item.childItems())
+            stack.extend(children(item))
     return [i for i in items(window) if id(i) not in skip]
 
 

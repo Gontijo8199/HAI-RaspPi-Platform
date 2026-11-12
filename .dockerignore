@@ -10,3 +10,6 @@ config/secrets.toml
 venv/
 .venv/
 config/settings.toml
+# POC/: protótipos locais com chaves (config.js, cert/). models/: baixado no build.
+POC/
+models/

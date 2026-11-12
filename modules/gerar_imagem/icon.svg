@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
+  <!-- Quadro com montanha e sol, e uma estrela: a IA desenha uma imagem. -->
+  <rect x="12" y="18" width="76" height="64" rx="10" fill="#7c3aed"/>
+  <circle cx="34" cy="38" r="8" fill="#fde047"/>
+  <path d="M18 76 L42 50 L56 64 L66 54 L82 76 Z" fill="#ffffff"/>
+  <path d="M74 10 l3 7 l7 3 l-7 3 l-3 7 l-3 -7 l-7 -3 l7 -3 Z" fill="#f59e0b"/>
+</svg>
