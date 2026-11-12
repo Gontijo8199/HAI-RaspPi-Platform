@@ -19,11 +19,15 @@ FROM python:3.12-slim
 # - libegl1, libgl1, libxkbcommon0, libfontconfig1, libdbus-1-3, libwayland-*:
 #   o que o Qt (PySide6, do pip) precisa do sistema para abrir a janela no
 #   Wayland. fonts-dejavu-core: fonte da interface.
+# - libglib2.0-0 (QtCore/QtGui) e libgssapi-krb5-2 (QtNetwork, carregado pelo
+#   QtQuick): a imagem slim não traz; sem elas o import do PySide6 falha.
 # - portaudio19-dev + build-essential: compilar o PyAudio.
 # - alsa-utils: aplay, que toca o áudio do Piper.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     python3-dev \
+    libglib2.0-0 \
+    libgssapi-krb5-2 \
     libegl1 \
     libgl1 \
     libxkbcommon0 \
