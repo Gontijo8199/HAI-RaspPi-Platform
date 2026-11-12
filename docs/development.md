@@ -124,12 +124,14 @@ verdade. Não é preciso Xvfb.
 | Arquivo | Cobre |
 |---|---|
 | `test_exemplo_logic.py` | validação e cálculo do módulo de exemplo |
+| `test_treinar_imagem_logic.py`, `test_treinar_imagem_controller.py`, `test_treinar_imagem_embedder.py` | KNN, tela do treinador (câmera e extrator simulados) e o modelo real (pulado se não baixado) |
+| `test_gerar_imagem_controller.py` | geração de imagem: sucesso, descrição vazia, erro da API, resultado depois da saída |
 | `test_chat_session.py` | lógica do chat: rascunho, envio, erros, cancelamento, nova conversa, resultados atrasados |
 | `test_chat_controller.py` | estado e ações da tela do chat, sem QML: rótulos, Enviar/Parar, fotos, voz, avisos, streaming agrupado |
 | `test_chat_editor.py` | editor com fotos embutidas (`QTextDocument`): ordem visual, ⌫, redesenho incremental |
 | `test_chat_page.py` | a tela do chat em QML: toques, atalhos, prévia da foto, diálogos, "Nova resposta" |
 | `test_keyboard.py` | teclado da tela integrado: abre, tem altura, escreve, estilo claro, layout numérico, ligar/desligar |
-| `test_app.py` | menu (1, N, mais de 6 e 0 módulos; abrir direto), navegação e limpeza de recursos, módulo de exemplo |
+| `test_app.py` | menu (1, N, mais de 6 e 0 módulos; abrir direto), navegação e limpeza de recursos, módulo de exemplo, módulos de imagem |
 | `test_main.py` | linha de comando, `main()` (sem tela → código 1), método de entrada |
 | `test_llm_client.py` | montagem multimodal, streaming, cancelamento, erros legíveis (google-genai simulado) |
 | `test_services.py` | configuração, Whisper compartilhado, preferências |

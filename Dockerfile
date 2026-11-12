@@ -66,6 +66,9 @@ RUN QT_QPA_PLATFORM=offscreen python -c "from PySide6.QtGui import QGuiApplicati
 
 COPY . .
 
+# Modelo do módulo Treinar reconhecedor (MobileNetV2, ≈14 MB).
+RUN python -m modules.treinar_imagem.embedder --download
+
 # settings.toml e secrets.toml são montados em runtime — nunca buildar com eles.
 VOLUME ["/app/config"]
 

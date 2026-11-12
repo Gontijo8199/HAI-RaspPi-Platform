@@ -36,6 +36,18 @@ def _chat(services: Services) -> Module:
     return ChatModule(services)
 
 
+def _treinar_imagem(services: Services) -> Module:
+    from modules.treinar_imagem import TrainerModule
+
+    return TrainerModule(services)
+
+
+def _gerar_imagem(services: Services) -> Module:
+    from modules.gerar_imagem import ImageGenModule
+
+    return ImageGenModule(services)
+
+
 def _exemplo(services: Services) -> Module:
     from modules.exemplo import ExampleModule
 
@@ -45,6 +57,8 @@ def _exemplo(services: Services) -> Module:
 #: id → (fábrica, ativo por padrão). A ordem é a ordem do menu.
 REGISTRY: dict[str, tuple[Callable[[Services], Module], bool]] = {
     "chat": (_chat, True),
+    "treinar_imagem": (_treinar_imagem, True),
+    "gerar_imagem": (_gerar_imagem, True),
     "exemplo": (_exemplo, False),
 }
 

@@ -17,6 +17,9 @@ logger = logging.getLogger(__name__)
 # Uma mensagem composta na interface: textos e fotos na ordem em que o aluno montou.
 MessagePart = str | CapturedImage
 
+# Gerar uma imagem leva bem mais que um trecho de texto (timeout_s vale por trecho).
+IMAGE_TIMEOUT_S = 120.0
+
 
 class LLMError(RuntimeError):
     """Falha ao consultar o LLM. A mensagem já é legível para o aluno/professor."""
@@ -31,6 +34,11 @@ def describe_error(exc: BaseException) -> str:
         texto = str(exc).lower()
         if code in (401, 403) or "api key" in texto or "api_key" in texto:
             return "A chave da API foi recusada. Confira config/secrets.toml."
+        if code == 402:
+            return (
+                "Os créditos da conta da IA acabaram. Peça ao professor para recarregar "
+                "no Google AI Studio."
+            )
         if code == 429:
             return "Limite de uso da IA atingido. Espere um pouco e tente de novo."
         if code >= 500:
@@ -125,8 +133,10 @@ class LLMClient:
         api_key: str,
         model: str = "gemma-4-26b-a4b-it",
         timeout: float = 30.0,
+        image_model: str = "gemini-2.5-flash-image",
     ):
         self.model = model
+        self.image_model = image_model
         self.timeout = timeout
         self._client = genai.Client(api_key=api_key)
         self._chat = self._nova_sessao()
@@ -158,7 +168,9 @@ class LLMClient:
                         loop.call_soon_threadsafe(queue.put_nowait, text)
             except Exception as exc:
                 # Só o tipo do erro: a mensagem pode ecoar parte do pedido.
-                logger.error("Erro no stream LLM: %s", type(exc).__name__)
+                logger.error(
+                    "Erro no stream LLM: %s %s", type(exc).__name__, getattr(exc, "code", "") or ""
+                )
                 if not cancelled.is_set():
                     loop.call_soon_threadsafe(queue.put_nowait, _StreamFailure(exc))
             finally:
@@ -188,6 +200,31 @@ class LLMClient:
             # Não aguarda a thread terminar (pode demorar um RTT); apenas
             # registra exceções inesperadas dela.
             executor_task.add_done_callback(_log_executor_error)
+
+    async def generate_image(self, prompt: str) -> bytes:
+        """Gera uma imagem a partir da descrição. Devolve os bytes (PNG/JPEG).
+
+        Cancelar a tarefa cancela a requisição (cliente assíncrono do genai).
+        Falhas viram LLMError com mensagem legível.
+        """
+        try:
+            response = await asyncio.wait_for(
+                self._client.aio.models.generate_content(
+                    model=self.image_model,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(response_modalities=["TEXT", "IMAGE"]),
+                ),
+                timeout=IMAGE_TIMEOUT_S,
+            )
+        except Exception as exc:
+            logger.error(
+                "Erro ao gerar imagem: %s %s", type(exc).__name__, getattr(exc, "code", "") or ""
+            )
+            raise LLMError(describe_error(exc)) from exc
+        for part in response.parts or []:
+            if part.inline_data is not None and part.inline_data.data:
+                return part.inline_data.data
+        raise LLMError("A IA não devolveu uma imagem. Tente descrever de outro jeito.")
 
     def cancel_stream(self) -> None:
         """Interrompe o stream em andamento na camada de rede.

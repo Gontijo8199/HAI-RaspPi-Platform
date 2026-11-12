@@ -23,6 +23,9 @@ numpy>=1.24.0
 # No Pi OS também serve: sudo apt install python3-opencv
 opencv-python-headless>=4.8.0
 
+# Treinar reconhecedor: MobileNetV2 em ONNX (também vem com o faster-whisper)
+onnxruntime>=1.14
+
 # LLM
 google-genai>=1.0.0
 

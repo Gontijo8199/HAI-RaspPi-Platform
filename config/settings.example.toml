@@ -6,6 +6,8 @@ model = "gemma-4-26b-a4b-it"
 # Espera máxima (s) por cada trecho da resposta do LLM. Modelos lentos (ex.: gemma-4
 # com imagem) podem precisar de 60 ou mais; estourado, a tela mostra o erro.
 timeout_s = 30
+# Modelo do módulo Gerar imagem (mesma chave da API).
+image_model = "gemini-2.5-flash-image"
 
 [stt]
 language = "pt"
@@ -39,6 +41,8 @@ open_single_module = false
 # Liga ou desliga módulos do menu, sobrescrevendo o padrão de modules/__init__.py
 # (REGISTRY). O módulo de exemplo vem desligado.
 # chat = true
+# treinar_imagem = true
+# gerar_imagem = true
 # exemplo = true
 
 [camera]

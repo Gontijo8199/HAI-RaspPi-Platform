@@ -7,6 +7,8 @@ cada atividade é um módulo independente.
 | Módulo | Padrão | O que faz | Documentação |
 |---|---|---|---|
 | **Conversar com a IA** | ativo | O aluno monta uma pergunta com texto, fala (Whisper local) e fotos da webcam; um LLM remoto responde em texto e em voz (Piper). | [modules/chat/README.md](modules/chat/README.md) |
+| **Treinar reconhecedor** | ativo | O aluno cria classes, tira fotos de cada uma pela webcam e treina um classificador (MobileNetV2 local + KNN); depois testa com fotos novas. | [modules/treinar_imagem/README.md](modules/treinar_imagem/README.md) |
+| **Gerar imagem** | ativo | O aluno descreve uma cena e a IA (Gemini) desenha a imagem. | [modules/gerar_imagem/README.md](modules/gerar_imagem/README.md) |
 | **Módulo de exemplo** | desativado | Divisores e números primos de um número digitado. Não usa rede nem hardware; serve de modelo para novos módulos. | [modules/exemplo/README.md](modules/exemplo/README.md) |
 
 Para ativar ou desativar um módulo numa instalação, use `[modules]` no
@@ -33,6 +35,7 @@ Mais documentação
 | Respostas da IA | internet e `[api] key` em `config/secrets.toml` |
 | Entrada por voz | microfone; o modelo Whisper é baixado na primeira vez e depois funciona offline |
 | Fotos | webcam em `[camera] device` |
+| Treinar reconhecedor | modelo MobileNetV2: baixe uma vez com `python -m modules.treinar_imagem.embedder --download` (≈14 MB) |
 | Resposta em voz | saída de áudio e Piper (ou espeak-ng) |
 
 Sem chave da API, o chat aparece como indisponível no menu e o resto da
@@ -79,7 +82,7 @@ Os dois arquivos estão no `.gitignore`; não versione a chave.
 
 | Seção | Chaves principais |
 |---|---|
-| `[api]` | `model`, `timeout_s` (espera máxima por trecho da resposta; padrão 30 s) |
+| `[api]` | `model`, `timeout_s` (espera máxima por trecho da resposta; padrão 30 s), `image_model` (módulo Gerar imagem; padrão `gemini-2.5-flash-image`) |
 | `[stt]` | `language`, `whisper_model` (tiny, base, small…), `whisper_device`, `whisper_compute_type`, `preload` |
 | `[tts]` | `backend` (piper, espeak, pyttsx3), `piper_bin`, `piper_model`, `rate`, `lang` |
 | `[display]` | `fullscreen`, `width`, `height`, `on_screen_keyboard`, `open_single_module` |

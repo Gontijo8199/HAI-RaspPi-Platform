@@ -274,3 +274,60 @@ async def test_resetar_sessao_durante_o_stream_nao_mistura_conversas(mock_genai)
     client.resetar_sessao()  # "Nova conversa" no meio da resposta
     assert [primeiro] + [t async for t in stream] == ["a", "b"]
     novo.send_message_stream.assert_not_called()
+
+
+def _image_response(*parts):
+    from google.genai import types
+
+    return types.GenerateContentResponse(
+        candidates=[types.Candidate(content=types.Content(parts=list(parts)))]
+    )
+
+
+@patch("google.genai.Client")
+@pytest.mark.asyncio
+async def test_generate_image_devolve_os_bytes(mock_genai):
+    from unittest.mock import AsyncMock
+
+    from google.genai import types
+
+    from api.llm_client import LLMClient
+
+    generate = AsyncMock(
+        return_value=_image_response(
+            types.Part(text="Aqui está"),
+            types.Part(inline_data=types.Blob(data=b"png", mime_type="image/png")),
+        )
+    )
+    mock_genai.return_value.aio.models.generate_content = generate
+    client = LLMClient(api_key="k", image_model="imagem-x")
+    assert await client.generate_image("gato") == b"png"
+    assert generate.call_args.kwargs["model"] == "imagem-x"
+
+
+@patch("google.genai.Client")
+@pytest.mark.asyncio
+async def test_generate_image_sem_imagem_ou_com_erro_vira_llmerror(mock_genai):
+    from unittest.mock import AsyncMock
+
+    from google.genai import types
+
+    from api.llm_client import LLMClient, LLMError
+
+    models = mock_genai.return_value.aio.models
+    client = LLMClient(api_key="k")
+    models.generate_content = AsyncMock(return_value=_image_response(types.Part(text="não")))
+    with pytest.raises(LLMError, match="não devolveu"):
+        await client.generate_image("gato")
+    models.generate_content = AsyncMock(side_effect=OSError("rede"))
+    with pytest.raises(LLMError, match="Sem conexão"):
+        await client.generate_image("gato")
+
+
+def test_creditos_esgotados_tem_mensagem_propria():
+    from google.genai import errors
+
+    from api.llm_client import describe_error
+
+    exc = errors.ClientError(402, {"error": {"status": "RESOURCE_EXHAUSTED", "message": "x"}})
+    assert "créditos" in describe_error(exc)
