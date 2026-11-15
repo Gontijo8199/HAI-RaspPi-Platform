@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
+  <!-- Câmera com um "✓": tirar fotos e ensinar a reconhecer. -->
+  <rect x="12" y="28" width="76" height="54" rx="10" fill="#2563eb"/>
+  <rect x="36" y="18" width="28" height="14" rx="4" fill="#2563eb"/>
+  <circle cx="50" cy="55" r="17" fill="#ffffff"/>
+  <path d="M41 55 l6 6 l12 -12" fill="none" stroke="#15803d" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

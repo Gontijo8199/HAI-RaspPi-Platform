@@ -39,6 +39,7 @@ SETTINGS_PATH = CONFIG_DIR / "settings.toml"
 SECRETS_PATH = CONFIG_DIR / "secrets.toml"
 
 DEFAULT_MODEL = "gemma-4-26b-a4b-it"
+DEFAULT_IMAGE_MODEL = "gemini-2.5-flash-image"
 
 
 class SpeechUnavailable(RuntimeError):
@@ -133,7 +134,9 @@ def build_llm(settings: dict, secrets: dict) -> tuple[LLMClient | None, str | No
         from api.llm_client import LLMClient
 
         timeout = float(api_cfg.get("timeout_s", 30.0))
-        return LLMClient(api_key=api_key, model=model, timeout=timeout), None
+        image_model = api_cfg.get("image_model") or DEFAULT_IMAGE_MODEL
+        client = LLMClient(api_key=api_key, model=model, timeout=timeout, image_model=image_model)
+        return client, None
     except Exception as exc:
         logger.error("Falha ao criar o cliente LLM: %s", type(exc).__name__)
         return None, f"Não consegui iniciar o cliente da IA ({type(exc).__name__})."

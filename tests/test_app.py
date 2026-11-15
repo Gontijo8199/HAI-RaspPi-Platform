@@ -22,6 +22,8 @@ from core.app import short_reason
 from modules.base import Module
 from modules.chat import ChatModule
 from modules.exemplo import ExampleModule
+from modules.gerar_imagem import ImageGenModule
+from modules.treinar_imagem import TrainerModule
 from ui import images
 
 
@@ -72,7 +74,7 @@ async def test_menu_lista_os_modulos_registrados_na_ordem(make_app):
     app = make_app()
     await pump()
     cards = [i.objectName() for i in find_all(app.window, "card_")]
-    assert cards == ["card_chat", "card_exemplo"]
+    assert cards == ["card_chat", "card_treinar_imagem", "card_gerar_imagem", "card_exemplo"]
     assert find(app.window, "menuMessage") is None  # sem problema, sem aviso
 
 
@@ -306,6 +308,48 @@ async def test_modulo_de_exemplo_valida_calcula_e_volta(make_app):
     assert example.controller is None
     assert len(screen_items(window)) == itens_no_menu
     assert app.services.recorders == []  # não abriu microfone
+
+
+async def test_modulos_de_imagem_funcionam_e_nao_deixam_sobras(make_app):
+    from fakes import FakeEmbedder
+
+    app = make_app()
+    trainer = next(m for m in app.modules if isinstance(m, TrainerModule))
+    generator = next(m for m in app.modules if isinstance(m, ImageGenModule))
+    trainer.embedder = FakeEmbedder()  # sem o modelo de verdade
+    await app.enter_module(trainer)  # aquecimento (ver acima)
+    await pump(0.3)
+    await app.leave_module()
+    await pump(0.4)
+    itens_no_menu = len(screen_items(app.window))
+    tarefas_iniciais = len(asyncio.all_tasks())
+
+    assert await app.enter_module(trainer)
+    await pump(0.3)
+    window = app.window
+    click(window, find(window, "addPhoto0"))
+    await until(lambda: trainer.controller.classes.rows[0]["photos"] == 1)
+    await until(lambda: find(window, "photo").property("paintedWidth") > 0)  # decodificou
+    click(window, find(window, "backButton"))
+    await until(lambda: app.active is None)
+    await pump(0.4)
+    assert trainer.controller is None and images.stored() == 0
+
+    assert await app.enter_module(generator)
+    await pump(0.3)
+    assert find(window, "promptField").hasActiveFocus()
+    type_text(window, "um gato")
+    click(window, find(window, "generateButton"))
+    await until(
+        lambda: (r := find(window, "result")) is not None and r.property("paintedWidth") > 0
+    )
+    assert app.services.llm.image_prompts == ["um gato"]
+    click(window, find(window, "backButton"))
+    await until(lambda: app.active is None)
+    await pump(0.4)
+    assert generator.controller is None and images.stored() == 0
+    assert len(screen_items(window)) == itens_no_menu
+    assert len(asyncio.all_tasks()) <= tarefas_iniciais
 
 
 # ---------- pré-carregamento do Whisper ----------

@@ -25,7 +25,7 @@ def test_padrao_usa_o_estado_do_registro():
 def test_settings_ativa_e_desativa_modulos():
     services = FakeServices()
     services.settings = {"modules": {"exemplo": True, "chat": False}}
-    assert ids(build_modules(services)) == ["exemplo"]
+    assert ids(build_modules(services)) == ["treinar_imagem", "gerar_imagem", "exemplo"]
 
 
 def test_selecao_explicita_mantem_a_ordem_do_registro():

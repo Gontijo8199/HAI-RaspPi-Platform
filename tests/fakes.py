@@ -18,6 +18,15 @@ class FakeLLM:
         self.sent: list[list] = []
         self.resets = 0
         self.cancels = 0
+        self.image_prompts: list[str] = []
+
+    async def generate_image(self, prompt):
+        self.image_prompts.append(prompt)
+        if self.gate is not None:
+            await self.gate.wait()
+        if self.error is not None:
+            raise self.error
+        return _image().data
 
     def resetar_sessao(self):
         self.resets += 1
@@ -137,11 +146,39 @@ def _image(n=1):
     return CapturedImage(data=buffer.tobytes(), width=40, height=30)
 
 
-class FakeCamera:
+class FakeLive:
+    """Prévia ao vivo de mentira: quadros _image(100), _image(101)..."""
+
     def __init__(self, fail=False):
+        self.fail = fail
+        self.frames = 0
+        self.opened = self.closed = 0
+
+    async def open(self):
+        if self.fail:
+            raise CameraError("câmera ocupada.")
+        self.opened += 1
+
+    async def frame(self):
+        self.frames += 1
+        await asyncio.sleep(0)
+        return _image(100 + self.frames)
+
+    async def close(self):
+        self.closed += 1
+
+
+class FakeCamera:
+    def __init__(self, fail=False, live_fail=False):
         self.fail = fail
         self.count = 0
         self.gate: asyncio.Event | None = None
+        self.lives: list[FakeLive] = []
+        self.live_fail = live_fail
+
+    def live(self):
+        self.lives.append(FakeLive(self.live_fail))
+        return self.lives[-1]
 
     async def capture(self):
         if self.gate is not None:
@@ -150,6 +187,21 @@ class FakeCamera:
             raise CameraError("câmera ocupada")
         self.count += 1
         return _image(self.count)
+
+
+class FakeEmbedder:
+    """Vetor da foto = a cor média dela (as fotos de _image(n) mudam de cor com n)."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def embed(self, jpeg):
+        import cv2
+
+        self.calls += 1
+        frame = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+        vector = frame.reshape(-1, 3).mean(axis=0).astype(np.float32)
+        return vector / np.linalg.norm(vector)
 
 
 class FakeServices:
